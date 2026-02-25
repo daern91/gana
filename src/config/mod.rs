@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub mod state;
 
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,7 @@ pub fn get_config_dir() -> Result<PathBuf, ConfigError> {
 }
 
 /// Return the config directory, using a custom home for testing.
+#[allow(dead_code)]
 fn config_dir_from_home(home: &Path) -> PathBuf {
     home.join(CONFIG_DIR_NAME)
 }
@@ -102,34 +104,33 @@ impl Config {
 }
 
 /// Discover the claude command by searching PATH.
+#[allow(dead_code)]
 pub fn get_claude_command() -> Result<String, ConfigError> {
     // Try to find 'claude' in PATH
-    if let Ok(output) = std::process::Command::new("which").arg("claude").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(path);
-            }
+    if let Ok(output) = std::process::Command::new("which").arg("claude").output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(path);
         }
     }
 
     // Try shell-based lookup (handles aliases)
     let shell = std::env::var("SHELL").unwrap_or_default();
-    if !shell.is_empty() {
-        if let Ok(output) = std::process::Command::new(&shell)
+    if !shell.is_empty()
+        && let Ok(output) = std::process::Command::new(&shell)
             .args(["-ic", "which claude 2>/dev/null || type claude 2>/dev/null"])
             .output()
-        {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                // Try to parse alias output
-                if let Some(path) = parse_alias_output(&text) {
-                    return Ok(path);
-                }
-                if !text.is_empty() {
-                    return Ok(text);
-                }
-            }
+        && output.status.success()
+    {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Try to parse alias output
+        if let Some(path) = parse_alias_output(&text) {
+            return Ok(path);
+        }
+        if !text.is_empty() {
+            return Ok(text);
         }
     }
 
@@ -138,6 +139,7 @@ pub fn get_claude_command() -> Result<String, ConfigError> {
 
 /// Parse alias output formats like "claude: aliased to /usr/local/bin/claude"
 /// or "claude -> /usr/local/bin/claude".
+#[allow(dead_code)]
 fn parse_alias_output(text: &str) -> Option<String> {
     let re = regex_lite::Regex::new(r"(?:aliased to|->|=)\s*([^\s]+)").ok()?;
     re.captures(text).map(|caps| caps[1].to_string())
@@ -228,13 +230,15 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Modifies process-global PATH/SHELL env vars, unsafe for parallel execution
     fn test_get_claude_command_missing() {
         // With an empty PATH, claude should not be found
         let original_path = std::env::var("PATH").unwrap_or_default();
         let original_shell = std::env::var("SHELL").ok();
 
         let tmp = TempDir::new().unwrap();
-        // SAFETY: test runs single-threaded for env var manipulation
+        // SAFETY: this test must be run in isolation (marked #[ignore])
+        // because modifying env vars affects all threads.
         unsafe {
             std::env::set_var("PATH", tmp.path());
             std::env::remove_var("SHELL");

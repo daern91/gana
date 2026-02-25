@@ -7,4 +7,5 @@ pub mod worktree_ops;
 
 pub use diff::DiffStats;
 pub use worktree::GitWorktree;
+#[allow(unused_imports)]
 pub use worktree_ops::cleanup_worktrees;

@@ -112,6 +112,7 @@ impl GitWorktree {
 /// Clean up all worktrees in the config directory's worktrees folder.
 ///
 /// Lists all worktrees using `git worktree list --porcelain` and removes each one.
+#[allow(dead_code)]
 pub fn cleanup_worktrees(config_dir: &str, cmd: &dyn CmdExec) -> Result<(), CmdError> {
     let worktrees_dir = Path::new(config_dir).join("worktrees");
     if !worktrees_dir.exists() {
@@ -129,19 +130,20 @@ pub fn cleanup_worktrees(config_dir: &str, cmd: &dyn CmdExec) -> Result<(), CmdE
             let git_dir = path.join(".git");
             if git_dir.exists() {
                 // Read the .git file to find the main repo
-                if let Ok(content) = std::fs::read_to_string(&git_dir) {
-                    if let Some(gitdir) = content.strip_prefix("gitdir: ") {
-                        let gitdir = gitdir.trim();
-                        // The gitdir points to .git/worktrees/<name> in the main repo
-                        if let Some(main_git) = Path::new(gitdir).parent().and_then(|p| p.parent())
-                        {
-                            let main_repo = main_git.parent().unwrap_or(main_git);
-                            let repo_str = main_repo.to_string_lossy().to_string();
-                            let _ = cmd.run(
-                                "git",
-                                &args(&["-C", &repo_str, "worktree", "prune"]),
-                            );
-                        }
+                if let Ok(content) = std::fs::read_to_string(&git_dir)
+                    && let Some(gitdir) = content.strip_prefix("gitdir: ")
+                {
+                    let gitdir = gitdir.trim();
+                    // The gitdir points to .git/worktrees/<name> in the main repo
+                    if let Some(main_git) =
+                        Path::new(gitdir).parent().and_then(|p| p.parent())
+                    {
+                        let main_repo = main_git.parent().unwrap_or(main_git);
+                        let repo_str = main_repo.to_string_lossy().to_string();
+                        let _ = cmd.run(
+                            "git",
+                            &args(&["-C", &repo_str, "worktree", "prune"]),
+                        );
                     }
                 }
             }

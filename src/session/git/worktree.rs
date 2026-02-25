@@ -31,6 +31,22 @@ impl GitWorktree {
         session_id: &str,
         cmd: &dyn CmdExec,
     ) -> Result<Self, CmdError> {
+        let config = Config::load_default().unwrap_or_default();
+        let config_dir = get_config_dir()
+            .map_err(|e| CmdError::Failed(format!("failed to get config dir: {}", e)))?;
+        Self::new_with_config(title, path, session_id, cmd, &config, &config_dir)
+    }
+
+    /// Like `new`, but accepts an explicit config and config directory.
+    /// This avoids depending on the home directory, making it suitable for tests.
+    pub fn new_with_config(
+        title: &str,
+        path: &str,
+        session_id: &str,
+        cmd: &dyn CmdExec,
+        config: &Config,
+        config_dir: &std::path::Path,
+    ) -> Result<Self, CmdError> {
         // Resolve to absolute path
         let abs_path = std::fs::canonicalize(path)
             .map_err(|e| CmdError::Failed(format!("failed to resolve path {}: {}", path, e)))?;
@@ -43,13 +59,10 @@ impl GitWorktree {
             .to_string();
 
         // Generate branch name
-        let config = Config::load_default().unwrap_or_default();
         let sanitized = sanitize_branch_name(title);
         let branch = format!("{}{}", config.branch_prefix, sanitized);
 
         // Generate unique worktree directory
-        let config_dir = get_config_dir()
-            .map_err(|e| CmdError::Failed(format!("failed to get config dir: {}", e)))?;
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -177,12 +190,23 @@ mod tests {
     #[test]
     fn test_new_with_real_git_repo() {
         use crate::cmd::SystemCmdExec;
+        use crate::config::Config;
 
         let tmp = setup_test_repo();
+        let config_dir = tempfile::TempDir::new().unwrap();
         let cmd = SystemCmdExec;
         let path = tmp.path().to_string_lossy().to_string();
+        let config = Config::default();
 
-        let wt = GitWorktree::new("Test Feature", &path, "claude", "test-sess", &cmd).unwrap();
+        let wt = GitWorktree::new_with_config(
+            "Test Feature",
+            &path,
+            "test-sess",
+            &cmd,
+            &config,
+            config_dir.path(),
+        )
+        .unwrap();
 
         assert!(!wt.repo_path.is_empty());
         assert!(!wt.worktree_dir.is_empty());

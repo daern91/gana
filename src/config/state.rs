@@ -36,7 +36,7 @@ impl AppState {
         std::fs::create_dir_all(config_dir)?;
         let path = config_dir.join(STATE_FILE_NAME);
         let contents =
-            serde_json::to_string_pretty(self).map_err(|e| std::io::Error::other(e))?;
+            serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(&path, contents)
     }
 }

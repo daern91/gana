@@ -2,14 +2,18 @@ pub mod confirmation;
 pub mod text_input;
 pub mod text_overlay;
 
+#[allow(unused_imports)]
 pub use confirmation::ConfirmationOverlay;
+#[allow(unused_imports)]
 pub use text_input::TextInputOverlay;
+#[allow(unused_imports)]
 pub use text_overlay::TextOverlay;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Clear;
 
 /// Calculate a centered rect of given percentage within `area`.
+#[allow(dead_code)]
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_layout = Layout::vertical([
         Constraint::Percentage((100 - percent_y) / 2),
@@ -26,6 +30,7 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 /// Render an overlay: clears the area then renders the widget centered.
+#[allow(dead_code)]
 pub fn render_overlay(
     frame: &mut Frame,
     area: Rect,

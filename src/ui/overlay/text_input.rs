@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 
+#[allow(dead_code)]
 pub struct TextInputOverlay {
     title: String,
     input: String,
@@ -10,6 +11,7 @@ pub struct TextInputOverlay {
     cancelled: bool,
 }
 
+#[allow(dead_code)]
 impl TextInputOverlay {
     pub fn new(title: impl Into<String>) -> Self {
         Self {

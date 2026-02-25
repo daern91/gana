@@ -2,12 +2,14 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 
+#[allow(dead_code)]
 pub struct TextOverlay {
     title: String,
     content: String,
     dismissed: bool,
 }
 
+#[allow(dead_code)]
 impl TextOverlay {
     pub fn new(title: impl Into<String>, content: impl Into<String>) -> Self {
         Self {

@@ -47,11 +47,13 @@ pub fn sanitize_branch_name(name: &str) -> String {
 }
 
 /// Check if `gh` CLI is available.
+#[allow(dead_code)]
 pub fn check_gh_cli(cmd: &dyn CmdExec) -> Result<(), CmdError> {
     cmd.run("gh", &args(&["--version"]))
 }
 
 /// Check if the given path is inside a git repository.
+#[allow(dead_code)]
 pub fn is_git_repo(cmd: &dyn CmdExec, path: &str) -> bool {
     cmd.run(
         "git",
@@ -61,6 +63,7 @@ pub fn is_git_repo(cmd: &dyn CmdExec, path: &str) -> bool {
 }
 
 /// Find the root of the git repository containing the given path.
+#[allow(dead_code)]
 pub fn find_git_repo_root(cmd: &dyn CmdExec, path: &str) -> Result<String, CmdError> {
     cmd.output(
         "git",

@@ -8,6 +8,7 @@ pub struct ConfirmationOverlay {
     confirmed: bool,
 }
 
+#[allow(dead_code)]
 impl ConfirmationOverlay {
     pub fn new(message: impl Into<String>) -> Self {
         Self {

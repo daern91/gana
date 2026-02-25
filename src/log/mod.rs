@@ -10,17 +10,15 @@ pub fn initialize(to_file: bool) {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
     );
 
-    if to_file {
-        if let Some(path) = log_file_path() {
-            if let Ok(file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
-                let _ = builder.with_writer(file).with_ansi(false).try_init();
-                return;
-            }
-        }
+    if to_file
+        && let Some(path) = log_file_path()
+        && let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+    {
+        let _ = builder.with_writer(file).with_ansi(false).try_init();
+        return;
     }
 
     // Fallback: discard output (test mode or file creation failed)

@@ -56,6 +56,7 @@ pub fn args(strs: &[&str]) -> Vec<String> {
 }
 
 /// Convert a Command to a string representation for debugging/testing.
+#[allow(dead_code)]
 pub fn command_to_string(cmd: &Command) -> String {
     let prog = cmd.get_program().to_string_lossy();
     let args: Vec<String> = cmd
