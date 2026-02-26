@@ -170,7 +170,15 @@ impl App {
 
                 if let AppAction::AttachSession(idx) = action {
                     if idx < self.instances.len() {
-                        // Resize tmux window + PTY to full terminal size
+                        // 1. Leave TUI FIRST so terminal is back to normal
+                        crossterm::terminal::disable_raw_mode()?;
+                        crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::terminal::LeaveAlternateScreen
+                        )?;
+
+                        // 2. NOW get the real terminal size (not TUI size)
+                        //    and resize both tmux window + PTY
                         if let Ok((tw, th)) = crossterm::terminal::size() {
                             if let Some(ref mut tmux) =
                                 self.instances[idx].tmux_session
@@ -180,19 +188,11 @@ impl App {
                             }
                         }
 
-                        // Leave TUI: restore terminal for direct PTY piping
-                        crossterm::terminal::disable_raw_mode()?;
-                        crossterm::execute!(
-                            std::io::stdout(),
-                            crossterm::terminal::LeaveAlternateScreen
-                        )?;
-
-                        // Enable raw mode for direct stdin piping (no line
-                        // buffering, so Ctrl+Q is received immediately)
+                        // 3. Enable raw mode for Ctrl+Q detection
                         crossterm::terminal::enable_raw_mode()?;
 
-                        // Attach: pipes stdin/stdout directly to tmux PTY.
-                        // Blocks until user presses Ctrl+Q.
+                        // 4. Attach: pipes stdin/stdout directly to tmux PTY.
+                        //    Blocks until user presses Ctrl+Q.
                         let result = self.instances[idx].attach();
 
                         // Restore TUI
