@@ -102,6 +102,7 @@ impl App {
         B::Error: Send + Sync + 'static,
     {
         self.load_instances()?;
+        self.restore_loaded_instances();
 
         // Show Ganesha fallback art when there are no sessions
         self.preview.set_fallback();
@@ -160,6 +161,9 @@ impl App {
 
             self.tick()?;
         }
+
+        // Save state on exit so sessions persist across restarts
+        let _ = self.save_instances();
         Ok(())
     }
 
@@ -501,6 +505,22 @@ impl App {
 
     fn refresh_list(&mut self) {
         self.list.set_items(&self.instances);
+    }
+
+    /// Reconnect loaded instances to their still-running tmux sessions.
+    /// If a tmux session no longer exists, mark the instance as Ready.
+    fn restore_loaded_instances(&mut self) {
+        use crate::session::InstanceStatus;
+        for instance in &mut self.instances {
+            if instance.status == InstanceStatus::Running {
+                if instance.restore_session().is_err() {
+                    // tmux session is gone — mark as not running
+                    instance.status = InstanceStatus::Ready;
+                    instance.started = false;
+                }
+            }
+        }
+        self.refresh_list();
     }
 
     fn load_instances(&mut self) -> anyhow::Result<()> {

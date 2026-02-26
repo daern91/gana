@@ -51,11 +51,13 @@ pub struct Instance {
     #[serde(default)]
     pub started: bool,
 
+    // Persisted — git worktree metadata survives restart
+    #[serde(default)]
+    pub git_worktree: Option<GitWorktree>,
+
     // Runtime-only fields (not serialized)
     #[serde(skip)]
     pub tmux_session: Option<TmuxSession>,
-    #[serde(skip)]
-    pub git_worktree: Option<GitWorktree>,
     #[serde(skip)]
     pub diff_stats: Option<DiffStats>,
 }
@@ -169,6 +171,23 @@ impl Instance {
         }
 
         self.touch();
+        Ok(())
+    }
+
+    /// Restore a previously saved session by reconnecting to its tmux session.
+    /// Called on app startup for instances loaded from disk.
+    /// Does NOT create a new worktree — assumes it still exists on disk.
+    pub fn restore_session(&mut self) -> Result<(), anyhow::Error> {
+        let mut tmux = TmuxSession::new(
+            &self.title,
+            &self.program,
+            Box::new(SystemCmdExec),
+            Box::new(SystemPtyFactory),
+        );
+        tmux.restore()?;
+        self.tmux_session = Some(tmux);
+        self.started = true;
+        self.status = InstanceStatus::Running;
         Ok(())
     }
 
@@ -377,10 +396,12 @@ mod tests {
         assert_eq!(loaded.branch, "gana/test-branch");
         assert!(loaded.started);
 
-        // Runtime fields are None after deserialization
+        // git_worktree IS preserved (persisted for session restore)
+        assert!(loaded.git_worktree.is_some());
+        assert_eq!(loaded.git_worktree.as_ref().unwrap().branch(), "gana/test");
+
+        // Runtime-only fields are None after deserialization
         assert!(loaded.tmux_session.is_none());
-        // git_worktree is skipped by serde, so it's None after deserialize
-        assert!(loaded.git_worktree.is_none());
         assert!(loaded.diff_stats.is_none());
     }
 
