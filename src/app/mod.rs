@@ -3,10 +3,12 @@ pub mod help;
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Clear;
-use std::time::Duration;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
-use crate::cmd::SystemCmdExec;
+use crate::cmd::{args, CmdExec, SystemCmdExec};
 use crate::config::Config;
+use crate::session::git::DiffStats;
 use crate::keys::{map_key, KeyAction};
 use crate::session::instance::{Instance, InstanceOptions, InstanceStatus};
 use crate::session::storage::{FileStorage, InstanceStorage};
@@ -32,6 +34,12 @@ enum AppState {
 enum AppAction {
     None,
     AttachSession(usize),
+}
+
+/// Background update messages from worker threads.
+enum BackgroundUpdate {
+    PreviewContent(usize, String),
+    DiffComputed(usize, DiffStats),
 }
 
 /// Action pending confirmation.
@@ -71,11 +79,16 @@ pub struct App {
     // Prompt flow state (N key: new session with initial prompt)
     creating_with_prompt: bool,
     pending_instance_title: Option<String>,
+
+    // Background update channels (async tick to prevent TUI freezing)
+    bg_sender: mpsc::Sender<BackgroundUpdate>,
+    bg_receiver: mpsc::Receiver<BackgroundUpdate>,
 }
 
 impl App {
     /// Create a new App with real config.
     pub fn new(config: Config, config_dir: std::path::PathBuf) -> Self {
+        let (bg_sender, bg_receiver) = mpsc::channel();
         Self {
             state: AppState::Default,
             instances: Vec::new(),
@@ -94,6 +107,8 @@ impl App {
             pending_action: None,
             creating_with_prompt: false,
             pending_instance_title: None,
+            bg_sender,
+            bg_receiver,
         }
     }
 
@@ -118,10 +133,25 @@ impl App {
             let _ = persistent_state.save(&self.config_dir);
         }
 
+        let mut last_bg_tick = Instant::now();
+
         while self.running {
             terminal.draw(|frame| self.draw(frame))?;
 
-            if event::poll(Duration::from_millis(500))?
+            // Process background results (non-blocking)
+            self.process_background_updates();
+
+            // Handle fallback when no instance selected
+            if self.instances.is_empty()
+                || self.list.selected_index() >= self.instances.len()
+            {
+                if self.preview.is_empty() {
+                    self.preview.set_fallback();
+                }
+            }
+
+            // Poll for key events with short timeout for responsiveness
+            if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
             {
                 let action = self.handle_key(key)?;
@@ -160,7 +190,11 @@ impl App {
                 }
             }
 
-            self.tick()?;
+            // Schedule background updates every 500ms
+            if last_bg_tick.elapsed() >= Duration::from_millis(500) {
+                self.schedule_background_updates();
+                last_bg_tick = Instant::now();
+            }
         }
 
         // Save state on exit so sessions persist across restarts
@@ -580,24 +614,64 @@ impl App {
         Ok(())
     }
 
-    fn tick(&mut self) -> anyhow::Result<()> {
+    /// Spawn background threads to fetch preview content and diff stats.
+    /// Results arrive via `bg_sender` channel and are processed by
+    /// `process_background_updates()`.
+    fn schedule_background_updates(&self) {
         let idx = self.list.selected_index();
-        if let Some(instance) = self.instances.get_mut(idx) {
-            if let Some(content) = instance.preview() {
-                self.preview.set_content(&content);
+        if let Some(instance) = self.instances.get(idx) {
+            if instance.status != InstanceStatus::Running || !instance.started {
+                return;
             }
-            let cmd = SystemCmdExec;
-            instance.update_diff_stats(&cmd);
-            if let Some(stats) = instance.get_diff_stats() {
-                self.diff_view.set_diff(stats);
-            }
-        } else {
-            // No instance selected -- show fallback Ganesha art
-            if self.preview.is_empty() {
-                self.preview.set_fallback();
+
+            // Preview: capture tmux pane content in background
+            let title = instance.title.clone();
+            let sender = self.bg_sender.clone();
+            let s1 = sender.clone();
+            std::thread::spawn(move || {
+                let sanitized = crate::session::tmux::sanitize_name(&title);
+                let cmd = SystemCmdExec;
+                if let Ok(content) = cmd.output(
+                    "tmux",
+                    &args(&["capture-pane", "-p", "-e", "-J", "-t", &sanitized]),
+                ) {
+                    let _ = s1.send(BackgroundUpdate::PreviewContent(idx, content));
+                }
+            });
+
+            // Diff: compute git diff in background
+            if let Some(ref worktree) = instance.git_worktree {
+                let wt = worktree.clone();
+                std::thread::spawn(move || {
+                    let cmd = SystemCmdExec;
+                    let stats = wt.diff(&cmd);
+                    let _ = sender.send(BackgroundUpdate::DiffComputed(idx, stats));
+                });
             }
         }
-        Ok(())
+    }
+
+    /// Drain the background update channel and apply results to the UI.
+    /// This is non-blocking — `try_recv()` returns immediately if empty.
+    fn process_background_updates(&mut self) {
+        while let Ok(update) = self.bg_receiver.try_recv() {
+            match update {
+                BackgroundUpdate::PreviewContent(idx, content) => {
+                    if idx == self.list.selected_index() {
+                        self.preview.set_content(&content);
+                    }
+                }
+                BackgroundUpdate::DiffComputed(idx, stats) => {
+                    if idx == self.list.selected_index() {
+                        self.diff_view.set_diff(&stats);
+                    }
+                    if let Some(instance) = self.instances.get_mut(idx) {
+                        instance.diff_stats = Some(stats);
+                        self.refresh_list();
+                    }
+                }
+            }
+        }
     }
 }
 
