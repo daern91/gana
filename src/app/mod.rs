@@ -27,6 +27,13 @@ enum AppState {
     Help,
 }
 
+/// Signal from handle_key that the caller needs to perform an action
+/// that requires leaving the TUI temporarily.
+enum AppAction {
+    None,
+    AttachSession(usize),
+}
+
 /// Action pending confirmation.
 #[derive(Debug, Clone, Copy)]
 enum PendingAction {
@@ -96,7 +103,38 @@ impl App {
             if event::poll(Duration::from_millis(500))?
                 && let Event::Key(key) = event::read()?
             {
-                self.handle_key(key)?;
+                let action = self.handle_key(key)?;
+
+                if let AppAction::AttachSession(idx) = action {
+                    if let Some(instance) = self.instances.get(idx) {
+                        let session_name =
+                            crate::session::tmux::sanitize_name(&instance.title);
+
+                        // Leave TUI: restore terminal for tmux attach
+                        crossterm::terminal::disable_raw_mode()?;
+                        crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::terminal::LeaveAlternateScreen
+                        )?;
+
+                        // Attach to tmux session directly
+                        let status = std::process::Command::new("tmux")
+                            .args(["attach-session", "-t", &session_name])
+                            .status();
+
+                        // Re-enter TUI
+                        crossterm::terminal::enable_raw_mode()?;
+                        crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::terminal::EnterAlternateScreen
+                        )?;
+                        terminal.clear()?;
+
+                        if let Err(e) = status {
+                            self.error.set_error(format!("Failed to attach: {}", e));
+                        }
+                    }
+                }
             }
 
             self.tick()?;
@@ -105,27 +143,39 @@ impl App {
     }
 
     /// Handle a raw key event by routing to the current state.
-    fn handle_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+    /// Returns an AppAction if the caller needs to do something outside the TUI.
+    fn handle_key(&mut self, key: KeyEvent) -> anyhow::Result<AppAction> {
         match self.state {
-            AppState::TextInput => self.handle_text_input_key(key),
-            AppState::Confirm => self.handle_confirm_key(key.code),
-            AppState::Help => self.handle_help_key(key.code),
+            AppState::TextInput => {
+                self.handle_text_input_key(key)?;
+                Ok(AppAction::None)
+            }
+            AppState::Confirm => {
+                self.handle_confirm_key(key.code)?;
+                Ok(AppAction::None)
+            }
+            AppState::Help => {
+                self.handle_help_key(key.code)?;
+                Ok(AppAction::None)
+            }
             AppState::Default => {
                 if let Some(action) = map_key(key) {
-                    self.handle_key_action(action);
+                    return Ok(self.handle_key_action(action));
                 }
-                Ok(())
+                Ok(AppAction::None)
             }
         }
     }
 
     /// Handle a mapped key action in Default state.
-    fn handle_key_action(&mut self, action: KeyAction) {
+    fn handle_key_action(&mut self, action: KeyAction) -> AppAction {
         match action {
             KeyAction::Up => self.list.select_previous(),
             KeyAction::Down => self.list.select_next(),
             KeyAction::Enter | KeyAction::Attach => {
-                // TODO: attach to selected session
+                if !self.instances.is_empty() {
+                    return AppAction::AttachSession(self.list.selected_index());
+                }
             }
             KeyAction::New => {
                 self.state = AppState::TextInput;
@@ -172,6 +222,7 @@ impl App {
             }
             _ => {}
         }
+        AppAction::None
     }
 
     /// Handle key events while the text input overlay is active.

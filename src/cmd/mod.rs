@@ -21,15 +21,23 @@ pub struct SystemCmdExec;
 
 impl CmdExec for SystemCmdExec {
     fn run(&self, name: &str, args: &[String]) -> Result<(), CmdError> {
-        let status = Command::new(name).args(args).status()?;
-        if status.success() {
+        // Use .output() instead of .status() to suppress stdout/stderr.
+        // Without this, git error messages leak through the TUI.
+        let output = Command::new(name).args(args).output()?;
+        if output.status.success() {
             Ok(())
         } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
             Err(CmdError::Failed(format!(
-                "{} {} exited with {}",
+                "{} {} exited with {}{}",
                 name,
                 args.join(" "),
-                status
+                output.status,
+                if stderr.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", stderr.trim())
+                }
             )))
         }
     }
