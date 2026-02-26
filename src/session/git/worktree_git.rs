@@ -112,7 +112,7 @@ mod tests {
             "/repo".to_string(),
             "/worktree".to_string(),
             "sess".to_string(),
-            "league/test".to_string(),
+            "gana/test".to_string(),
             "abc123".to_string(),
         )
     }
@@ -151,7 +151,7 @@ mod tests {
             .withf(|name, cmd_args| {
                 name == "git" && cmd_args.iter().any(|a| a == "symbolic-ref")
             })
-            .returning(|_, _| Ok("refs/heads/league/test\n".to_string()));
+            .returning(|_, _| Ok("refs/heads/gana/test\n".to_string()));
 
         assert!(wt.is_branch_checked_out(&mock).unwrap());
     }

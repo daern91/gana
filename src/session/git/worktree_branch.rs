@@ -113,7 +113,7 @@ mod tests {
             "/repo".to_string(),
             "/wt".to_string(),
             "sid".to_string(),
-            "league/test-branch".to_string(),
+            "gana/test-branch".to_string(),
             "abc123".to_string(),
         );
 

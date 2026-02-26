@@ -257,7 +257,7 @@ mod tests {
             repo_path.clone(),
             wt_path_str.clone(),
             "test-sess".to_string(),
-            "league/test-wt".to_string(),
+            "gana/test-wt".to_string(),
             base,
         );
 
@@ -273,7 +273,7 @@ mod tests {
             .output("git", &args(&["-C", &repo_path, "branch"]))
             .unwrap();
         assert!(
-            branches.contains("league/test-wt"),
+            branches.contains("gana/test-wt"),
             "branch should be listed"
         );
 
@@ -305,7 +305,7 @@ mod tests {
             repo_path.clone(),
             wt_path_str.clone(),
             "test-sess".to_string(),
-            "league/keep-branch".to_string(),
+            "gana/keep-branch".to_string(),
             base,
         );
 
@@ -321,7 +321,7 @@ mod tests {
             .output("git", &args(&["-C", &repo_path, "branch"]))
             .unwrap();
         assert!(
-            branches.contains("league/keep-branch"),
+            branches.contains("gana/keep-branch"),
             "branch should still exist after remove"
         );
     }
@@ -341,7 +341,7 @@ mod tests {
         // First, create the branch manually
         cmd.run(
             "git",
-            &args(&["-C", &repo_path, "branch", "league/reuse-branch"]),
+            &args(&["-C", &repo_path, "branch", "gana/reuse-branch"]),
         )
         .unwrap();
 
@@ -353,7 +353,7 @@ mod tests {
             repo_path,
             wt_path_str.clone(),
             "test-sess".to_string(),
-            "league/reuse-branch".to_string(),
+            "gana/reuse-branch".to_string(),
             base,
         );
 

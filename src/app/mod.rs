@@ -562,7 +562,7 @@ pub fn run(config: Config, config_dir: std::path::PathBuf) -> anyhow::Result<()>
 impl App {
     /// Create an App suitable for unit testing (no real config dir).
     fn new_for_test() -> Self {
-        Self::new(Config::default(), std::path::PathBuf::from("/tmp/league-test"))
+        Self::new(Config::default(), std::path::PathBuf::from("/tmp/gana-test"))
     }
 }
 
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn test_first_run_help_shown() {
         // Use a unique temp dir to ensure clean state
-        let dir = std::path::PathBuf::from("/tmp/league-test-first-run-help");
+        let dir = std::path::PathBuf::from("/tmp/gana-test-first-run-help");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
 

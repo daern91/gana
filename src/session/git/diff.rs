@@ -148,7 +148,7 @@ diff --git a/b.rs b/b.rs
             "/repo".to_string(),
             "/worktree".to_string(),
             "sess".to_string(),
-            "league/test".to_string(),
+            "gana/test".to_string(),
             "abc123".to_string(),
         );
 
@@ -182,7 +182,7 @@ diff --git a/b.rs b/b.rs
             "/repo".to_string(),
             "/worktree".to_string(),
             "sess".to_string(),
-            "league/test".to_string(),
+            "gana/test".to_string(),
             "abc123".to_string(),
         );
 

@@ -8,8 +8,8 @@ use thiserror::Error;
 use crate::cmd::{CmdExec, args};
 use pty::PtyFactory;
 
-/// Prefix for all league tmux session names.
-pub const TMUX_PREFIX: &str = "league_";
+/// Prefix for all gana tmux session names.
+pub const TMUX_PREFIX: &str = "gana_";
 
 #[derive(Debug, Error)]
 pub enum TmuxError {
@@ -460,9 +460,9 @@ impl TmuxSession {
         Ok(())
     }
 
-    /// Clean up all league tmux sessions.
+    /// Clean up all gana tmux sessions.
     ///
-    /// Lists all tmux sessions and kills any that start with the league prefix.
+    /// Lists all tmux sessions and kills any that start with the gana prefix.
     pub fn cleanup_sessions(cmd_exec: &dyn CmdExec) -> Result<(), TmuxError> {
         let output = match cmd_exec.output(
             "tmux",
@@ -856,7 +856,7 @@ mod tests {
         let commands = cmd_exec.commands();
         // First: list-sessions
         assert_eq!(commands[0].1[0], "list-sessions");
-        // Then kill the two league sessions (not the other one)
+        // Then kill the two gana sessions (not the other one)
         assert_eq!(commands.len(), 3); // list + 2 kills
         assert_eq!(commands[1].1[0], "kill-session");
         assert_eq!(commands[2].1[0], "kill-session");

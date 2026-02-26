@@ -28,9 +28,9 @@ pub fn initialize(to_file: bool) {
         .try_init();
 }
 
-/// Return the log file path: {temp_dir}/league.log
+/// Return the log file path: {temp_dir}/gana.log
 fn log_file_path() -> Option<PathBuf> {
     let mut path = std::env::temp_dir();
-    path.push("league.log");
+    path.push("gana.log");
     Some(path)
 }

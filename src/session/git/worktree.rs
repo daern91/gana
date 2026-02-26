@@ -142,14 +142,14 @@ mod tests {
     fn test_from_storage_and_accessors() {
         let wt = GitWorktree::from_storage(
             "/home/user/repos/myproject".to_string(),
-            "/home/user/.league/worktrees/sess_123".to_string(),
+            "/home/user/.gana/worktrees/sess_123".to_string(),
             "sess".to_string(),
-            "league/my-feature".to_string(),
+            "gana/my-feature".to_string(),
             "abc123def456".to_string(),
         );
 
-        assert_eq!(wt.worktree_path(), "/home/user/.league/worktrees/sess_123");
-        assert_eq!(wt.branch(), "league/my-feature");
+        assert_eq!(wt.worktree_path(), "/home/user/.gana/worktrees/sess_123");
+        assert_eq!(wt.branch(), "gana/my-feature");
         assert_eq!(wt.repo_path(), "/home/user/repos/myproject");
         assert_eq!(wt.repo_name(), "myproject");
         assert_eq!(wt.base_commit_sha(), "abc123def456");

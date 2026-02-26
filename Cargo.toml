@@ -1,12 +1,12 @@
 [package]
-name = "league"
+name = "gana"
 version = "0.1.0"
 edition = "2024"
-description = "Orchestrate multiple AI coding assistants in parallel, isolated workspaces"
+description = "Orchestrate your divine helpers — manage multiple AI agent teams in parallel"
 license = "MIT"
 
 [[bin]]
-name = "league"
+name = "gana"
 path = "src/main.rs"
 
 [dependencies]

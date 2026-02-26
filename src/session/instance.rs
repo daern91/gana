@@ -196,7 +196,7 @@ impl Instance {
     pub fn pause(&mut self, cmd: &dyn CmdExec) -> Result<(), anyhow::Error> {
         // Commit any changes with a timestamp message
         if let Some(ref worktree) = self.git_worktree {
-            let msg = format!("league: auto-save {}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+            let msg = format!("gana: auto-save {}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
             worktree.commit_changes(&msg, cmd)?;
 
             // Remove worktree directory but keep the branch
@@ -354,14 +354,14 @@ mod tests {
         let mut instance = make_instance();
         instance.started = true;
         instance.status = InstanceStatus::Running;
-        instance.branch = "league/test-branch".to_string();
+        instance.branch = "gana/test-branch".to_string();
 
         // Add a git worktree (this IS serializable)
         instance.git_worktree = Some(GitWorktree::from_storage(
             "/repo".to_string(),
             "/worktree".to_string(),
             "sess".to_string(),
-            "league/test".to_string(),
+            "gana/test".to_string(),
             "abc123".to_string(),
         ));
 
@@ -374,7 +374,7 @@ mod tests {
         // Data fields preserved
         assert_eq!(loaded.title, "test-session");
         assert_eq!(loaded.status, InstanceStatus::Running);
-        assert_eq!(loaded.branch, "league/test-branch");
+        assert_eq!(loaded.branch, "gana/test-branch");
         assert!(loaded.started);
 
         // Runtime fields are None after deserialization
@@ -393,7 +393,7 @@ mod tests {
             "/repo".to_string(),
             "/worktree".to_string(),
             "sess".to_string(),
-            "league/test".to_string(),
+            "gana/test".to_string(),
             "abc123".to_string(),
         ));
 
@@ -429,7 +429,7 @@ mod tests {
             "/home/user/repos/myproject".to_string(),
             "/worktree".to_string(),
             "sess".to_string(),
-            "league/test".to_string(),
+            "gana/test".to_string(),
             "abc123".to_string(),
         ));
 

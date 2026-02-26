@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-const CONFIG_DIR_NAME: &str = ".league";
+const CONFIG_DIR_NAME: &str = ".gana";
 const CONFIG_FILE_NAME: &str = "config.json";
 
 #[derive(Debug, Error)]
@@ -34,7 +34,7 @@ pub struct Config {
     #[serde(default = "default_poll_interval")]
     pub daemon_poll_interval: u64,
 
-    /// Prefix for git branch names created by league.
+    /// Prefix for git branch names created by gana.
     #[serde(default = "default_branch_prefix")]
     pub branch_prefix: String,
 }
@@ -48,7 +48,7 @@ fn default_poll_interval() -> u64 {
 }
 
 fn default_branch_prefix() -> String {
-    "league/".to_string()
+    "gana/".to_string()
 }
 
 impl Default for Config {
@@ -62,7 +62,7 @@ impl Default for Config {
     }
 }
 
-/// Return the config directory path: `~/.league/`
+/// Return the config directory path: `~/.gana/`
 pub fn get_config_dir() -> Result<PathBuf, ConfigError> {
     let home = dirs::home_dir().ok_or(ConfigError::HomeDirNotFound)?;
     Ok(home.join(CONFIG_DIR_NAME))
