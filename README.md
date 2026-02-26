@@ -28,17 +28,11 @@ Named after the Sanskrit word गण (*gaṇa*) — a troop of attendants. In Hi
 
 ## Install
 
-### Quick install
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/daern91/gana/master/install.sh | bash
 ```
 
-### From source (requires Rust)
-
-```bash
-cargo install --git https://github.com/daern91/gana.git
-```
+gana auto-updates silently in the background. No manual upgrades needed.
 
 ### Prerequisites
 
