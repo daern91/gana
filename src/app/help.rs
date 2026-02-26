@@ -2,7 +2,7 @@
 pub fn help_text() -> String {
     format!(
         "\
-League - AI Coding Assistant Orchestrator
+☸ Gana — Orchestrate Your Divine Helpers
 
 Navigation:
   j/↓      Move down
