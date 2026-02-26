@@ -31,7 +31,7 @@ Named after the Sanskrit word गण (*gaṇa*) — a troop of attendants. In Hi
 ### From source (requires Rust)
 
 ```bash
-git clone https://github.com/danieleriksson/gana.git
+git clone https://github.com/daern91/gana.git
 cd gana
 cargo install --path .
 ```
