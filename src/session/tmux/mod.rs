@@ -274,15 +274,10 @@ impl TmuxSession {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
-        // Close old PTY and open a fresh one so it negotiates the
-        // current terminal size (the old PTY was opened at preview pane size)
-        self.ptmx.take();
-        let mut attach_cmd = std::process::Command::new("tmux");
-        attach_cmd.args(["attach-session", "-t", &self.sanitized_name]);
-        let fresh_ptmx = self.pty_factory.start(&mut attach_cmd)?;
-        self.ptmx = Some(fresh_ptmx);
-
-        let ptmx = self.ptmx.as_ref().unwrap();
+        let ptmx = match self.ptmx.as_ref() {
+            Some(f) => f,
+            None => return Err(TmuxError::CommandFailed("no PTY to attach to".into())),
+        };
 
         // Clone file descriptors for the two threads
         let mut ptmx_reader = ptmx
