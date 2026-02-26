@@ -1,6 +1,49 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+/// Strip ANSI escape sequences from a string.
+/// Handles CSI sequences (ESC[...m) and OSC sequences (ESC]...BEL/ST).
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek() {
+                Some('[') => {
+                    chars.next(); // consume '['
+                    // Skip until we hit a letter (the terminator)
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next(); // consume ']'
+                    // Skip until BEL (\x07) or ST (ESC \)
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch == '\x07' {
+                            break;
+                        }
+                        if ch == '\x1b' {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ => {} // other escape, skip just the ESC
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Renders tmux pane content with scroll support.
 pub struct PreviewPane {
     normal_content: Vec<String>,
@@ -24,9 +67,10 @@ impl PreviewPane {
     }
 
     /// Replace content by splitting text into lines.
+    /// Strips ANSI escape sequences since ratatui renders plain text.
     /// When not scrolling, updates the displayed content immediately.
     pub fn set_content(&mut self, text: &str) {
-        self.normal_content = text.lines().map(|l| l.to_string()).collect();
+        self.normal_content = text.lines().map(|l| strip_ansi(l)).collect();
         if !self.is_scrolling {
             self.content = self.normal_content.clone();
         }
@@ -44,7 +88,7 @@ impl PreviewPane {
 
     /// Enter scroll mode with full history content.
     pub fn enter_scroll_mode(&mut self, full_history: &str) {
-        self.content = full_history.lines().map(|l| l.to_string()).collect();
+        self.content = full_history.lines().map(|l| strip_ansi(l)).collect();
         self.is_scrolling = true;
         self.scroll_offset = 0;
     }
