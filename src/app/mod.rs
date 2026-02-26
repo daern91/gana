@@ -110,28 +110,60 @@ impl App {
                         let session_name =
                             crate::session::tmux::sanitize_name(&instance.title);
 
-                        // Leave TUI: restore terminal for tmux attach
-                        crossterm::terminal::disable_raw_mode()?;
-                        crossterm::execute!(
-                            std::io::stdout(),
-                            crossterm::terminal::LeaveAlternateScreen
-                        )?;
+                        let inside_tmux = std::env::var("TMUX").is_ok();
 
-                        // Attach to tmux session directly
-                        let status = std::process::Command::new("tmux")
-                            .args(["attach-session", "-t", &session_name])
-                            .status();
+                        if inside_tmux {
+                            // Inside tmux: use switch-client to jump to the
+                            // session. The user can return with
+                            // `tmux switch-client -l` (last session) or by
+                            // selecting the original session.
+                            crossterm::terminal::disable_raw_mode()?;
+                            crossterm::execute!(
+                                std::io::stdout(),
+                                crossterm::terminal::LeaveAlternateScreen
+                            )?;
 
-                        // Re-enter TUI
-                        crossterm::terminal::enable_raw_mode()?;
-                        crossterm::execute!(
-                            std::io::stdout(),
-                            crossterm::terminal::EnterAlternateScreen
-                        )?;
-                        terminal.clear()?;
+                            let status = std::process::Command::new("tmux")
+                                .args(["switch-client", "-t", &session_name])
+                                .status();
 
-                        if let Err(e) = status {
-                            self.error.set_error(format!("Failed to attach: {}", e));
+                            // Re-enter TUI (user will return via
+                            // tmux switch-client)
+                            crossterm::terminal::enable_raw_mode()?;
+                            crossterm::execute!(
+                                std::io::stdout(),
+                                crossterm::terminal::EnterAlternateScreen
+                            )?;
+                            terminal.clear()?;
+
+                            if let Err(e) = status {
+                                self.error
+                                    .set_error(format!("Failed to attach: {}", e));
+                            }
+                        } else {
+                            // Not inside tmux: use attach-session
+                            crossterm::terminal::disable_raw_mode()?;
+                            crossterm::execute!(
+                                std::io::stdout(),
+                                crossterm::terminal::LeaveAlternateScreen
+                            )?;
+
+                            let status = std::process::Command::new("tmux")
+                                .args(["attach-session", "-t", &session_name])
+                                .status();
+
+                            // Re-enter TUI
+                            crossterm::terminal::enable_raw_mode()?;
+                            crossterm::execute!(
+                                std::io::stdout(),
+                                crossterm::terminal::EnterAlternateScreen
+                            )?;
+                            terminal.clear()?;
+
+                            if let Err(e) = status {
+                                self.error
+                                    .set_error(format!("Failed to attach: {}", e));
+                            }
                         }
                     }
                 }
