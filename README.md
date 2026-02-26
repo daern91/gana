@@ -11,7 +11,7 @@
 ░╚═════╝░╚═╝░░╚═╝╚═╝░░╚══╝╚═╝░░╚═╝
 ```
 
-**gana** manages multiple [Claude Code agent teams](https://docs.anthropic.com/en/docs/claude-code/tutorials#use-claude-code-as-a-unix-style-utility) in parallel, each in its own isolated git worktree. Create sessions, monitor progress, view diffs, and switch between teams — all from a terminal UI.
+**gana** manages multiple [Claude Code agent teams](https://code.claude.com/docs/en/agent-teams) in parallel, each in its own isolated git worktree. Create sessions, monitor progress, view diffs, and switch between teams — all from a terminal UI.
 
 Named after the Sanskrit word गण (*gaṇa*) — a troop of attendants. In Hindu mythology, Ganesha (lord of the ganas) orchestrates these troops to remove obstacles. Each session you create is a gana: a self-coordinating team of AI agents.
 
@@ -114,7 +114,7 @@ gana (the tool)
 ## Development
 
 ```bash
-cargo test             # Run tests (~138 tests)
+cargo test             # Run 147 tests
 cargo clippy           # Lint
 cargo fmt              # Format
 cargo build --release  # Build release binary

@@ -2,7 +2,11 @@
 name = "gana"
 version = "0.1.0"
 edition = "2024"
-description = "Orchestrate your divine helpers — manage multiple AI agent teams in parallel"
+description = "Orchestrate your AI agent teams — manage multiple Claude Code sessions in parallel"
+repository = "https://github.com/danieleriksson/gana"
+keywords = ["cli", "tui", "ai", "claude", "agent"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 license = "MIT"
 
 [[bin]]

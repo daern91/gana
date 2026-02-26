@@ -1,2 +1,4 @@
 /target
-excalidraw.log
+*.log
+.DS_Store
+.claude/
