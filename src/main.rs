@@ -16,7 +16,7 @@ use session::storage::InstanceStorage;
 #[derive(Parser)]
 #[command(
     name = "gana",
-    about = "Orchestrate your divine helpers",
+    about = "Orchestrate your AI agent teams",
     version
 )]
 struct Cli {
