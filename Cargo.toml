@@ -1,6 +1,6 @@
 [package]
 name = "gana"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Orchestrate your AI agent teams — manage multiple Claude Code sessions in parallel"
 repository = "https://github.com/daern91/gana"

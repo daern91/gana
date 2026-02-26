@@ -17,6 +17,7 @@ Session Management:
   D        Kill session (force)
   p        Pause/Resume session
   P        Push & create PR
+  r        Restart session (options overlay)
   a        Attach to session
 
 Preview:

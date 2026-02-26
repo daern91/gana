@@ -27,6 +27,7 @@ enum AppState {
     TextInput,
     Confirm,
     Help,
+    Restart,
 }
 
 /// Signal from handle_key that the caller needs to perform an action
@@ -76,6 +77,8 @@ pub struct App {
     confirmation: Option<ConfirmationOverlay>,
     text_input: Option<TextInputOverlay>,
     help_overlay: Option<TextOverlay>,
+    restart_overlay: Option<crate::ui::overlay::RestartOverlay>,
+    restart_idx: Option<usize>,
 
     // Pending action after confirmation
     pending_action: Option<PendingAction>,
@@ -111,6 +114,8 @@ impl App {
             confirmation: None,
             text_input: None,
             help_overlay: None,
+            restart_overlay: None,
+            restart_idx: None,
             pending_action: None,
             creating_with_prompt: false,
             pending_instance_title: None,
@@ -248,6 +253,10 @@ impl App {
                 self.handle_help_key(key.code)?;
                 Ok(AppAction::None)
             }
+            AppState::Restart => {
+                self.handle_restart_key(key)?;
+                Ok(AppAction::None)
+            }
             AppState::Default => {
                 if let Some(action) = map_key(key) {
                     return Ok(self.handle_key_action(action));
@@ -364,6 +373,18 @@ impl App {
                     }
                     self.refresh_list();
                     let _ = self.save_instances();
+                }
+            }
+            KeyAction::Restart => {
+                if !self.instances.is_empty() {
+                    let idx = self.list.selected_index();
+                    let status = self.instances[idx].status;
+                    if status == InstanceStatus::Running || status == InstanceStatus::Ready {
+                        self.menu.highlight_key("r");
+                        self.restart_overlay = Some(crate::ui::overlay::RestartOverlay::new());
+                        self.restart_idx = Some(idx);
+                        self.state = AppState::Restart;
+                    }
                 }
             }
             KeyAction::Push => {
@@ -516,6 +537,87 @@ impl App {
         Ok(())
     }
 
+    fn handle_restart_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        if let Some(ref mut overlay) = self.restart_overlay {
+            overlay.handle_key(key);
+
+            if overlay.is_cancelled() {
+                self.restart_overlay = None;
+                self.restart_idx = None;
+                self.state = AppState::Default;
+            } else if overlay.is_submitted() {
+                let skip_perms = overlay.skip_permissions;
+                let resume = overlay.resume_conversation;
+                let idx = self.restart_idx.take().unwrap_or(0);
+                self.restart_overlay = None;
+                self.state = AppState::Default;
+
+                if idx < self.instances.len() {
+                    if let Some(ref wt) = self.instances[idx].git_worktree {
+                        let worktree_path = wt.worktree_path().to_string();
+                        let title = self.instances[idx].title.clone();
+                        let program = self.instances[idx].program.clone();
+                        let sender = self.bg_sender.clone();
+
+                        // Kill existing tmux session
+                        self.instances[idx].tmux_session = None;
+                        self.instances[idx].status = InstanceStatus::Loading;
+                        self.refresh_list();
+
+                        // Build program command with flags
+                        let program_cmd = if skip_perms && program == "claude" {
+                            format!("{} --dangerously-skip-permissions", program)
+                        } else {
+                            program
+                        };
+
+                        std::thread::spawn(move || {
+                            let cmd = SystemCmdExec;
+                            let sanitized =
+                                crate::session::tmux::sanitize_name(&title);
+                            let _ = cmd.run(
+                                "tmux",
+                                &args(&["kill-session", "-t", &sanitized]),
+                            );
+
+                            // Start new session with program + flags
+                            if let Err(e) = cmd.run(
+                                "tmux",
+                                &args(&[
+                                    "new-session", "-d", "-s", &sanitized,
+                                    "-c", &worktree_path, &program_cmd,
+                                ]),
+                            ) {
+                                let _ = sender.send(
+                                    BackgroundUpdate::InstanceFailed(idx, e.to_string()),
+                                );
+                                return;
+                            }
+
+                            // If resume requested, wait a bit then send /resume
+                            if resume {
+                                // Wait for Claude to start up
+                                std::thread::sleep(std::time::Duration::from_secs(3));
+                                let _ = cmd.run(
+                                    "tmux",
+                                    &args(&[
+                                        "send-keys", "-t", &sanitized,
+                                        "/resume", "Enter",
+                                    ]),
+                                );
+                            }
+
+                            let _ = sender.send(
+                                BackgroundUpdate::SessionRestarted(idx),
+                            );
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Draw all UI components.
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
@@ -583,6 +685,13 @@ impl App {
             AppState::Help => {
                 if let Some(ref overlay) = self.help_overlay {
                     let popup_area = centered_rect(60, 70, area);
+                    frame.render_widget(Clear, popup_area);
+                    overlay.render_content(popup_area, frame.buffer_mut());
+                }
+            }
+            AppState::Restart => {
+                if let Some(ref overlay) = self.restart_overlay {
+                    let popup_area = centered_rect(50, 40, area);
                     frame.render_widget(Clear, popup_area);
                     overlay.render_content(popup_area, frame.buffer_mut());
                 }
@@ -1235,17 +1344,17 @@ mod tests {
     }
 
     #[test]
-    fn test_text_input_32_char_limit() {
+    fn test_text_input_64_char_limit() {
         let mut input = TextInputOverlay::new("Test");
-        // Type 32 characters
-        for _ in 0..32 {
+        // Type 64 characters
+        for _ in 0..64 {
             input.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         }
-        assert_eq!(input.input().len(), 32);
+        assert_eq!(input.input().len(), 64);
 
-        // 33rd character should be rejected
+        // 65th character should be rejected
         input.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
-        assert_eq!(input.input().len(), 32);
+        assert_eq!(input.input().len(), 64);
     }
 
     #[test]

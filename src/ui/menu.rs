@@ -29,6 +29,7 @@ const MENU_ITEMS: &[(&str, &str)] = &[
     ("D", "Kill"),
     ("p", "Pause"),
     ("P", "Push"),
+    ("r", "Restart"),
     ("q", "Quit"),
     ("?", "Help"),
     ("Tab", "Switch"),

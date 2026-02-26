@@ -1,4 +1,5 @@
 pub mod confirmation;
+pub mod restart;
 pub mod text_input;
 pub mod text_overlay;
 
@@ -6,6 +7,8 @@ pub mod text_overlay;
 pub use confirmation::ConfirmationOverlay;
 #[allow(unused_imports)]
 pub use text_input::TextInputOverlay;
+#[allow(unused_imports)]
+pub use restart::RestartOverlay;
 #[allow(unused_imports)]
 pub use text_overlay::TextOverlay;
 
