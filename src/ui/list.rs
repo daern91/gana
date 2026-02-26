@@ -25,6 +25,10 @@ impl ListPane {
         self.spinner_tick = self.spinner_tick.wrapping_add(1);
     }
 
+    pub fn spinner_tick(&self) -> usize {
+        self.spinner_tick
+    }
+
     /// Rebuild the rendered list items from a slice of instances.
     pub fn set_items(&mut self, instances: &[Instance]) {
         let repos: std::collections::HashSet<&str> = instances

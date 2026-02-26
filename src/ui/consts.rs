@@ -55,3 +55,16 @@ pub const FALLBACK_TEXT: &str = r#"
 
     orchestrate your AI agent teams
 "#;
+
+/// Loading messages shown while a session is being created.
+/// Cycled in order, one every ~2 seconds.
+pub const LOADING_MESSAGES: &[&str] = &[
+    "☸  Removing obstacles...",
+    "☸  Creating git worktree...",
+    "☸  Summoning your gana...",
+    "☸  Starting AI assistant...",
+    "☸  Handling trust prompt...",
+    "☸  Almost there...",
+    "☸  Preparing the workspace...",
+    "☸  Ganesha is working...",
+];

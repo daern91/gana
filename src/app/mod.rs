@@ -148,15 +148,21 @@ impl App {
             self.process_background_updates();
 
             // Advance spinner animation for Loading sessions
-            if self.instances.iter().any(|i| i.status == InstanceStatus::Loading) {
+            let has_loading = self.instances.iter().any(|i| i.status == InstanceStatus::Loading);
+            if has_loading {
                 self.list.advance_spinner();
                 self.refresh_list();
             }
 
-            // Handle fallback when no instance selected
-            if self.instances.is_empty()
-                || self.list.selected_index() >= self.instances.len()
-            {
+            // Show loading animation or fallback in preview pane
+            let sel_idx = self.list.selected_index();
+            if sel_idx < self.instances.len() {
+                if self.instances[sel_idx].status == InstanceStatus::Loading {
+                    let tick = self.list.spinner_tick();
+                    let name = self.instances[sel_idx].title.clone();
+                    self.preview.set_loading(tick, &name);
+                }
+            } else if self.instances.is_empty() {
                 if self.preview.is_empty() {
                     self.preview.set_fallback();
                 }
