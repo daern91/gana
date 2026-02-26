@@ -170,26 +170,33 @@ impl App {
 
                 if let AppAction::AttachSession(idx) = action {
                     if idx < self.instances.len() {
-                        let session_name = crate::session::tmux::sanitize_name(
-                            &self.instances[idx].title,
-                        );
+                        // Resize tmux window + PTY to full terminal size
+                        if let Ok((tw, th)) = crossterm::terminal::size() {
+                            if let Some(ref mut tmux) =
+                                self.instances[idx].tmux_session
+                            {
+                                let _ = tmux.set_size(tw, th);
+                                tmux.resize_pty(tw, th);
+                            }
+                        }
 
-                        // Leave TUI completely
+                        // Leave TUI: restore terminal for direct PTY piping
                         crossterm::terminal::disable_raw_mode()?;
                         crossterm::execute!(
                             std::io::stdout(),
                             crossterm::terminal::LeaveAlternateScreen
                         )?;
 
-                        // Run tmux attach as a direct subprocess.
-                        // This lets tmux negotiate the full terminal size
-                        // natively. The user detaches with Ctrl+B D (tmux
-                        // default) or the session ends.
-                        let status = std::process::Command::new("tmux")
-                            .args(["attach-session", "-t", &session_name])
-                            .status();
+                        // Enable raw mode for direct stdin piping (no line
+                        // buffering, so Ctrl+Q is received immediately)
+                        crossterm::terminal::enable_raw_mode()?;
 
-                        // Re-enter TUI
+                        // Attach: pipes stdin/stdout directly to tmux PTY.
+                        // Blocks until user presses Ctrl+Q.
+                        let result = self.instances[idx].attach();
+
+                        // Restore TUI
+                        crossterm::terminal::disable_raw_mode()?;
                         crossterm::terminal::enable_raw_mode()?;
                         crossterm::execute!(
                             std::io::stdout(),
@@ -197,7 +204,7 @@ impl App {
                         )?;
                         terminal.clear()?;
 
-                        if let Err(e) = status {
+                        if let Err(e) = result {
                             self.error
                                 .set_error(format!("Failed to attach: {}", e));
                         }

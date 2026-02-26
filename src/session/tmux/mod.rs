@@ -343,40 +343,42 @@ impl TmuxSession {
             }
         });
 
-        // Thread 3: monitor terminal size changes and resize tmux window
+        // Thread 3: monitor terminal size changes and resize both tmux window AND PTY
         let session_name_for_resize = self.sanitized_name.clone();
         let resize_stop = Arc::clone(&stop_flag);
+        let ptmx_for_resize = ptmx
+            .try_clone()
+            .map_err(|e| TmuxError::PtyError(e.to_string()))?;
         let _resize_handle = std::thread::spawn(move || {
+            use std::os::fd::AsRawFd;
+            let pty_fd = ptmx_for_resize.as_raw_fd();
             let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
-            // Do an initial resize to sync tmux with current terminal size
-            let _ = std::process::Command::new("tmux")
-                .args([
-                    "resize-window",
-                    "-t",
-                    &session_name_for_resize,
-                    "-x",
-                    &last_size.0.to_string(),
-                    "-y",
-                    &last_size.1.to_string(),
-                ])
-                .output();
+
+            // Resize both tmux window and PTY
+            let do_resize = |cols: u16, rows: u16, name: &str, fd: i32| {
+                let _ = std::process::Command::new("tmux")
+                    .args([
+                        "resize-window", "-t", name,
+                        "-x", &cols.to_string(),
+                        "-y", &rows.to_string(),
+                    ])
+                    .output();
+                let ws = nix::libc::winsize {
+                    ws_row: rows, ws_col: cols,
+                    ws_xpixel: 0, ws_ypixel: 0,
+                };
+                unsafe { nix::libc::ioctl(fd, nix::libc::TIOCSWINSZ, &ws); }
+            };
+
+            // Initial resize to sync with current terminal
+            do_resize(last_size.0, last_size.1, &session_name_for_resize, pty_fd);
 
             while !resize_stop.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 if let Ok(current_size) = crossterm::terminal::size() {
                     if current_size != last_size {
                         last_size = current_size;
-                        let _ = std::process::Command::new("tmux")
-                            .args([
-                                "resize-window",
-                                "-t",
-                                &session_name_for_resize,
-                                "-x",
-                                &current_size.0.to_string(),
-                                "-y",
-                                &current_size.1.to_string(),
-                            ])
-                            .output();
+                        do_resize(current_size.0, current_size.1, &session_name_for_resize, pty_fd);
                     }
                 }
             }
@@ -458,6 +460,24 @@ impl TmuxSession {
             ]),
         )?;
         Ok(())
+    }
+
+    /// Resize the PTY file descriptor directly using TIOCSWINSZ ioctl.
+    /// This makes the program inside tmux (e.g. claude) re-render at the
+    /// new dimensions. Matches Go claude-squad's pty.Setsize() approach.
+    pub fn resize_pty(&self, cols: u16, rows: u16) {
+        if let Some(ref ptmx) = self.ptmx {
+            use std::os::fd::AsRawFd;
+            let ws = nix::libc::winsize {
+                ws_row: rows,
+                ws_col: cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            unsafe {
+                nix::libc::ioctl(ptmx.as_raw_fd(), nix::libc::TIOCSWINSZ, &ws);
+            }
+        }
     }
 
     /// Clean up all gana tmux sessions.
