@@ -66,5 +66,5 @@ pub const LOADING_MESSAGES: &[&str] = &[
     "☸  Handling trust prompt...",
     "☸  Almost there...",
     "☸  Preparing the workspace...",
-    "☸  Ganesha is working...",
+    "☸  Assembling your troops...",
 ];
