@@ -81,11 +81,17 @@ impl PreviewPane {
         self.set_content(crate::ui::consts::FALLBACK_TEXT);
     }
 
-    /// Show loading animation with Ganesha art and rotating messages.
-    /// `tick` controls which message is shown (cycles every call).
+    /// Show animated Ganesha loading screen with swaying motion and rotating messages.
+    /// `tick` controls both the animation frame and the status message.
     pub fn set_loading(&mut self, tick: usize, session_name: &str) {
+        let frames = crate::ui::consts::GANESHA_FRAMES;
         let messages = crate::ui::consts::LOADING_MESSAGES;
-        // Cycle through messages, changing every ~20 ticks (2 seconds at 100ms poll)
+
+        // Ganesha sways: change frame every ~5 ticks (500ms)
+        let frame_idx = (tick / 5) % frames.len();
+        let frame = frames[frame_idx];
+
+        // Messages cycle every ~20 ticks (2 seconds)
         let msg_idx = (tick / 20) % messages.len();
         let msg = messages[msg_idx];
 
@@ -93,8 +99,8 @@ impl PreviewPane {
         let spinner = spinner_frames[tick % spinner_frames.len()];
 
         let loading_text = format!(
-            "{}\n\n\n       {} Creating session '{}'\n\n       {}\n",
-            crate::ui::consts::FALLBACK_TEXT.trim_end(),
+            "{}\n\n   {} Creating '{}'\n\n   {}\n",
+            frame.trim_end(),
             spinner,
             session_name,
             msg,
