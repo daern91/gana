@@ -626,6 +626,7 @@ dependencies = [
  "predicates",
  "ratatui",
  "regex-lite",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

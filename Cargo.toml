@@ -54,6 +54,9 @@ sha2 = "0.10"
 # Platform-specific process management
 nix = { version = "0.29", features = ["signal", "process", "term"] }
 
+# Semantic versioning comparison for auto-update
+semver = "1"
+
 [dev-dependencies]
 tempfile = "3"
 mockall = "0.13"

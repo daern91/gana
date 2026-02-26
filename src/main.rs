@@ -9,6 +9,7 @@ mod log;
 mod session;
 #[allow(dead_code)]
 mod ui;
+mod update;
 
 use clap::{Parser, Subcommand};
 use session::storage::InstanceStorage;
@@ -46,6 +47,11 @@ async fn main() -> anyhow::Result<()> {
     log::initialize(true);
     let config_dir = config::get_config_dir()?;
     let config = config::Config::load(&config_dir).unwrap_or_default();
+
+    // Auto-update check (background, never blocks)
+    if let Some(version) = update::auto_update(&config_dir) {
+        eprintln!("☸ gana updated to v{} — restart to use the new version", version);
+    }
 
     match cli.command {
         Some(Commands::Reset) => {
