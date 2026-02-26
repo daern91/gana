@@ -170,6 +170,15 @@ impl App {
 
                 if let AppAction::AttachSession(idx) = action {
                     if idx < self.instances.len() {
+                        // Resize tmux to full terminal before attaching
+                        if let Ok((tw, th)) = crossterm::terminal::size() {
+                            if let Some(ref mut tmux) =
+                                self.instances[idx].tmux_session
+                            {
+                                let _ = tmux.set_size(tw, th);
+                            }
+                        }
+
                         // Leave TUI: restore terminal for direct PTY piping
                         crossterm::terminal::disable_raw_mode()?;
                         crossterm::execute!(
