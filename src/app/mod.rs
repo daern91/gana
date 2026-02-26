@@ -40,6 +40,8 @@ enum AppAction {
 enum BackgroundUpdate {
     PreviewContent(usize, String),
     DiffComputed(usize, DiffStats),
+    InstanceReady(usize, crate::session::git::GitWorktree),
+    InstanceFailed(usize, String),
 }
 
 /// Action pending confirmation.
@@ -80,6 +82,9 @@ pub struct App {
     creating_with_prompt: bool,
     pending_instance_title: Option<String>,
 
+    // Prompts waiting for async session creation to complete
+    pending_prompts: std::collections::HashMap<usize, String>,
+
     // Background update channels (async tick to prevent TUI freezing)
     bg_sender: mpsc::Sender<BackgroundUpdate>,
     bg_receiver: mpsc::Receiver<BackgroundUpdate>,
@@ -107,6 +112,7 @@ impl App {
             pending_action: None,
             creating_with_prompt: false,
             pending_instance_title: None,
+            pending_prompts: std::collections::HashMap::new(),
             bg_sender,
             bg_receiver,
         }
@@ -140,6 +146,12 @@ impl App {
 
             // Process background results (non-blocking)
             self.process_background_updates();
+
+            // Advance spinner animation for Loading sessions
+            if self.instances.iter().any(|i| i.status == InstanceStatus::Loading) {
+                self.list.advance_spinner();
+                self.refresh_list();
+            }
 
             // Handle fallback when no instance selected
             if self.instances.is_empty()
@@ -516,18 +528,92 @@ impl App {
     // ── Instance management ─────────────────────────────────────────
 
     fn create_instance(&mut self, title: String) -> anyhow::Result<()> {
-        let cmd = SystemCmdExec;
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+
+        // Create placeholder instance with Loading status
         let mut instance = Instance::new(InstanceOptions {
-            title,
-            path: cwd,
+            title: title.clone(),
+            path: cwd.clone(),
             program: self.config.default_program.clone(),
             auto_yes: self.config.auto_yes,
         });
-        instance.start(true, &cmd)?;
+        instance.status = InstanceStatus::Loading;
         self.instances.push(instance);
+        let idx = self.instances.len() - 1;
         self.refresh_list();
-        self.save_instances()?;
+
+        // Spawn background thread for slow git worktree + tmux creation
+        let sender = self.bg_sender.clone();
+        let program = self.config.default_program.clone();
+        std::thread::spawn(move || {
+            let cmd = SystemCmdExec;
+
+            // Create worktree (slow: 0.5-5s)
+            let worktree = match crate::session::git::GitWorktree::new(&title, &cwd, &program, &title, &cmd) {
+                Ok(wt) => wt,
+                Err(e) => {
+                    let _ = sender.send(BackgroundUpdate::InstanceFailed(idx, e.to_string()));
+                    return;
+                }
+            };
+
+            // Setup worktree on disk (slow: git worktree add)
+            if let Err(e) = worktree.setup(&cmd) {
+                let _ = sender.send(BackgroundUpdate::InstanceFailed(idx, e.to_string()));
+                return;
+            }
+
+            // Create tmux session (medium: 50-500ms)
+            let sanitized = crate::session::tmux::sanitize_name(&title);
+            // Kill existing session if any
+            let _ = cmd.run("tmux", &args(&["kill-session", "-t", &sanitized]));
+            // Create new detached session
+            let worktree_path = worktree.worktree_path().to_string();
+            if let Err(e) = cmd.run("tmux", &args(&[
+                "new-session", "-d", "-s", &sanitized, "-c", &worktree_path, &program,
+            ])) {
+                let _ = sender.send(BackgroundUpdate::InstanceFailed(idx, e.to_string()));
+                return;
+            }
+
+            // Handle trust prompt (slow: 0-45s polling)
+            let timeout_secs: u64 = match program.as_str() {
+                "claude" => 30,
+                "aider" | "gemini" => 45,
+                _ => 0,
+            };
+            if timeout_secs > 0 {
+                let start = std::time::Instant::now();
+                let mut interval = std::time::Duration::from_millis(100);
+                let (trust_string, response_keys): (&str, Vec<&str>) = if program == "claude" {
+                    ("Do you trust the files in this folder?", vec!["Enter"])
+                } else {
+                    ("Open documentation url", vec!["d", "Enter"])
+                };
+
+                while start.elapsed().as_secs() < timeout_secs {
+                    std::thread::sleep(interval);
+                    if let Ok(content) = cmd.output("tmux", &args(&[
+                        "capture-pane", "-p", "-t", &sanitized,
+                    ])) {
+                        if content.contains(trust_string) {
+                            for key in &response_keys {
+                                let _ = cmd.run("tmux", &args(&["send-keys", "-t", &sanitized, key]));
+                            }
+                            break;
+                        }
+                    }
+                    interval = std::cmp::min(
+                        std::time::Duration::from_millis((interval.as_millis() as f64 * 1.2) as u64),
+                        std::time::Duration::from_secs(1),
+                    );
+                }
+            }
+
+            // Success -- send worktree back to main thread
+            let _ = sender.send(BackgroundUpdate::InstanceReady(idx, worktree));
+        });
+
         Ok(())
     }
 
@@ -536,22 +622,12 @@ impl App {
         title: String,
         prompt: String,
     ) -> anyhow::Result<()> {
-        let cmd = SystemCmdExec;
-        let cwd = std::env::current_dir()?.to_string_lossy().to_string();
-        let mut instance = Instance::new(InstanceOptions {
-            title,
-            path: cwd,
-            program: self.config.default_program.clone(),
-            auto_yes: self.config.auto_yes,
-        });
-        instance.start(true, &cmd)?;
+        // Store the prompt for delivery after InstanceReady arrives
+        let idx = self.instances.len(); // will be the index after create_instance pushes
         if !prompt.is_empty() {
-            instance.send_prompt(&prompt);
+            self.pending_prompts.insert(idx, prompt);
         }
-        self.instances.push(instance);
-        self.refresh_list();
-        self.save_instances()?;
-        Ok(())
+        self.create_instance(title)
     }
 
     fn kill_instance(&mut self, idx: usize) -> anyhow::Result<()> {
@@ -669,6 +745,38 @@ impl App {
                         instance.diff_stats = Some(stats);
                         self.refresh_list();
                     }
+                }
+                BackgroundUpdate::InstanceReady(idx, worktree) => {
+                    if let Some(instance) = self.instances.get_mut(idx) {
+                        instance.branch = worktree.branch().to_string();
+                        instance.git_worktree = Some(worktree);
+
+                        // Attach to the tmux session (fast -- just opens PTY)
+                        if instance.restore_session().is_ok() {
+                            instance.status = InstanceStatus::Running;
+                        } else {
+                            instance.status = InstanceStatus::Ready;
+                            self.error.set_error("Failed to attach to session".to_string());
+                        }
+
+                        // Send pending prompt if any
+                        if let Some(prompt) = self.pending_prompts.remove(&idx) {
+                            if !prompt.is_empty() {
+                                instance.send_prompt(&prompt);
+                            }
+                        }
+
+                        self.refresh_list();
+                        let _ = self.save_instances();
+                    }
+                }
+                BackgroundUpdate::InstanceFailed(idx, msg) => {
+                    if idx < self.instances.len() {
+                        self.instances.remove(idx);
+                        self.pending_prompts.remove(&idx);
+                        self.refresh_list();
+                    }
+                    self.error.set_error(format!("Session creation failed: {}", msg));
                 }
             }
         }

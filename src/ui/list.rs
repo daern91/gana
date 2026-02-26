@@ -3,10 +3,13 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget
 
 use crate::session::instance::{Instance, InstanceStatus};
 
+const SPINNER_FRAMES: &[char] = &['\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280F}'];
+
 /// A selectable list pane displaying session instances with status indicators.
 pub struct ListPane {
     selected: usize,
     items: Vec<ListItem<'static>>,
+    spinner_tick: usize,
 }
 
 impl ListPane {
@@ -14,7 +17,12 @@ impl ListPane {
         Self {
             selected: 0,
             items: Vec::new(),
+            spinner_tick: 0,
         }
+    }
+
+    pub fn advance_spinner(&mut self) {
+        self.spinner_tick = self.spinner_tick.wrapping_add(1);
     }
 
     /// Rebuild the rendered list items from a slice of instances.
@@ -25,9 +33,10 @@ impl ListPane {
             .collect();
         let show_repo = repos.len() > 1;
 
+        let spinner_tick = self.spinner_tick;
         self.items = instances
             .iter()
-            .map(|inst| render_instance(inst, show_repo))
+            .map(|inst| render_instance(inst, show_repo, spinner_tick))
             .collect();
         // Clamp selection
         if !self.items.is_empty() && self.selected >= self.items.len() {
@@ -105,16 +114,19 @@ impl Widget for &ListPane {
 ///
 /// When `show_repo` is true and the instance has a git worktree, the repo name
 /// is appended after the branch in parentheses (e.g. `[branch] (repo)`).
-fn render_instance(inst: &Instance, show_repo: bool) -> ListItem<'static> {
+fn render_instance(inst: &Instance, show_repo: bool, spinner_tick: usize) -> ListItem<'static> {
     let (icon, icon_style) = match inst.status {
-        InstanceStatus::Running => ("●", Style::default().fg(Color::Green)),
-        InstanceStatus::Ready => ("○", Style::default()),
-        InstanceStatus::Loading => ("◌", Style::default().fg(Color::Yellow)),
-        InstanceStatus::Paused => ("⏸", Style::default().add_modifier(Modifier::DIM)),
+        InstanceStatus::Running => ("●".to_string(), Style::default().fg(Color::Green)),
+        InstanceStatus::Ready => ("○".to_string(), Style::default()),
+        InstanceStatus::Loading => {
+            let frame = SPINNER_FRAMES[spinner_tick % SPINNER_FRAMES.len()];
+            (format!("☸ {}", frame), Style::default().fg(Color::Yellow))
+        }
+        InstanceStatus::Paused => ("⏸".to_string(), Style::default().add_modifier(Modifier::DIM)),
     };
 
     let mut spans = vec![
-        Span::styled(icon.to_string(), icon_style),
+        Span::styled(icon, icon_style),
         Span::raw(" "),
         Span::raw(inst.title.clone()),
     ];
@@ -325,7 +337,7 @@ mod tests {
     /// Render a single instance directly (bypassing set_items multi-repo detection)
     /// and return the rendered text.
     fn render_single_direct(inst: &Instance, show_repo: bool) -> String {
-        let item = render_instance(inst, show_repo);
+        let item = render_instance(inst, show_repo, 0);
         let list = List::new(vec![item]);
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
@@ -395,5 +407,22 @@ mod tests {
             "Should not contain repo name: {}",
             content
         );
+    }
+
+    #[test]
+    fn test_spinner_advance() {
+        let mut pane = ListPane::new();
+        assert_eq!(pane.spinner_tick, 0);
+
+        pane.advance_spinner();
+        assert_eq!(pane.spinner_tick, 1);
+
+        pane.advance_spinner();
+        assert_eq!(pane.spinner_tick, 2);
+
+        // Test wrapping (should not panic at usize::MAX)
+        pane.spinner_tick = usize::MAX;
+        pane.advance_spinner();
+        assert_eq!(pane.spinner_tick, 0);
     }
 }
