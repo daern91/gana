@@ -106,64 +106,34 @@ impl App {
                 let action = self.handle_key(key)?;
 
                 if let AppAction::AttachSession(idx) = action {
-                    if let Some(instance) = self.instances.get(idx) {
-                        let session_name =
-                            crate::session::tmux::sanitize_name(&instance.title);
+                    if idx < self.instances.len() {
+                        // Leave TUI: restore terminal for direct PTY piping
+                        crossterm::terminal::disable_raw_mode()?;
+                        crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::terminal::LeaveAlternateScreen
+                        )?;
 
-                        let inside_tmux = std::env::var("TMUX").is_ok();
+                        // Enable raw mode for direct stdin piping (no line
+                        // buffering, so Ctrl+Q is received immediately)
+                        crossterm::terminal::enable_raw_mode()?;
 
-                        if inside_tmux {
-                            // Inside tmux: use switch-client to jump to the
-                            // session. The user can return with
-                            // `tmux switch-client -l` (last session) or by
-                            // selecting the original session.
-                            crossterm::terminal::disable_raw_mode()?;
-                            crossterm::execute!(
-                                std::io::stdout(),
-                                crossterm::terminal::LeaveAlternateScreen
-                            )?;
+                        // Attach: pipes stdin/stdout directly to tmux PTY.
+                        // Blocks until user presses Ctrl+Q.
+                        let result = self.instances[idx].attach();
 
-                            let status = std::process::Command::new("tmux")
-                                .args(["switch-client", "-t", &session_name])
-                                .status();
+                        // Restore TUI
+                        crossterm::terminal::disable_raw_mode()?;
+                        crossterm::terminal::enable_raw_mode()?;
+                        crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::terminal::EnterAlternateScreen
+                        )?;
+                        terminal.clear()?;
 
-                            // Re-enter TUI (user will return via
-                            // tmux switch-client)
-                            crossterm::terminal::enable_raw_mode()?;
-                            crossterm::execute!(
-                                std::io::stdout(),
-                                crossterm::terminal::EnterAlternateScreen
-                            )?;
-                            terminal.clear()?;
-
-                            if let Err(e) = status {
-                                self.error
-                                    .set_error(format!("Failed to attach: {}", e));
-                            }
-                        } else {
-                            // Not inside tmux: use attach-session
-                            crossterm::terminal::disable_raw_mode()?;
-                            crossterm::execute!(
-                                std::io::stdout(),
-                                crossterm::terminal::LeaveAlternateScreen
-                            )?;
-
-                            let status = std::process::Command::new("tmux")
-                                .args(["attach-session", "-t", &session_name])
-                                .status();
-
-                            // Re-enter TUI
-                            crossterm::terminal::enable_raw_mode()?;
-                            crossterm::execute!(
-                                std::io::stdout(),
-                                crossterm::terminal::EnterAlternateScreen
-                            )?;
-                            terminal.clear()?;
-
-                            if let Err(e) = status {
-                                self.error
-                                    .set_error(format!("Failed to attach: {}", e));
-                            }
+                        if let Err(e) = result {
+                            self.error
+                                .set_error(format!("Failed to attach: {}", e));
                         }
                     }
                 }

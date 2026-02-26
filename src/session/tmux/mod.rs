@@ -221,6 +221,94 @@ impl TmuxSession {
         }
     }
 
+    /// Attach interactively to the tmux session.
+    ///
+    /// Pipes stdin/stdout directly to/from the tmux session's PTY.
+    /// Returns when the user presses Ctrl+Q (ASCII 17) to detach.
+    /// After returning, calls `detach()` to restore a fresh monitoring PTY.
+    pub fn attach_interactive(&mut self) -> Result<(), TmuxError> {
+        use std::io::{Read, Write};
+
+        let ptmx = match self.ptmx.as_ref() {
+            Some(f) => f,
+            None => return Err(TmuxError::CommandFailed("no PTY to attach to".into())),
+        };
+
+        // Clone file descriptors for the two threads
+        let mut ptmx_reader = ptmx
+            .try_clone()
+            .map_err(|e| TmuxError::PtyError(e.to_string()))?;
+        let mut ptmx_writer = ptmx
+            .try_clone()
+            .map_err(|e| TmuxError::PtyError(e.to_string()))?;
+
+        // Channel to signal detach
+        let (detach_tx, detach_rx) = std::sync::mpsc::channel::<()>();
+        let detach_tx2 = detach_tx.clone();
+
+        // Goroutine 1: copy PTY output -> stdout
+        let stdout_handle = std::thread::spawn(move || {
+            let mut stdout = std::io::stdout();
+            let mut buf = [0u8; 4096];
+            loop {
+                match ptmx_reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let _ = stdout.write_all(&buf[..n]);
+                        let _ = stdout.flush();
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = detach_tx2.send(());
+        });
+
+        // Goroutine 2: read stdin, detect Ctrl+Q, forward rest to PTY
+        let stdin_handle = std::thread::spawn(move || {
+            let mut stdin = std::io::stdin().lock();
+            let mut buf = [0u8; 32];
+
+            // Skip initial terminal control sequences (first 50ms)
+            let start = std::time::Instant::now();
+
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        // Skip control sequences in first 50ms
+                        if start.elapsed() < std::time::Duration::from_millis(50) {
+                            continue;
+                        }
+
+                        // Check for Ctrl+Q (ASCII 17)
+                        if n == 1 && buf[0] == 17 {
+                            let _ = detach_tx.send(());
+                            return;
+                        }
+
+                        // Forward to tmux
+                        let _ = ptmx_writer.write_all(&buf[..n]);
+                        let _ = ptmx_writer.flush();
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Block until detach signal
+        let _ = detach_rx.recv();
+
+        // Clean up threads (they'll exit when PTY closes)
+        // Don't join stdout_handle - it may be blocked on read
+        drop(stdout_handle);
+        drop(stdin_handle);
+
+        // Detach: close current PTY and open a fresh one for monitoring
+        self.detach()?;
+
+        Ok(())
+    }
+
     /// Send keys to the tmux session.
     pub fn send_keys(&self, keys: &str) -> Result<(), TmuxError> {
         self.cmd_exec.run(

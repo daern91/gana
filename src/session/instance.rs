@@ -239,6 +239,15 @@ impl Instance {
         Ok(())
     }
 
+    /// Attach interactively to the tmux session.
+    /// Pipes stdin/stdout directly. Returns on Ctrl+Q.
+    pub fn attach(&mut self) -> Result<(), anyhow::Error> {
+        if let Some(ref mut tmux) = self.tmux_session {
+            tmux.attach_interactive()?;
+        }
+        Ok(())
+    }
+
     /// Get preview content from tmux pane.
     pub fn preview(&self) -> Option<String> {
         self.tmux_session
