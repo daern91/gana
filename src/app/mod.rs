@@ -693,20 +693,11 @@ impl App {
     /// Spawn background threads to fetch preview content and diff stats.
     /// Results arrive via `bg_sender` channel and are processed by
     /// `process_background_updates()`.
-    fn schedule_background_updates(&mut self) {
+    fn schedule_background_updates(&self) {
         let idx = self.list.selected_index();
-        if let Some(instance) = self.instances.get_mut(idx) {
+        if let Some(instance) = self.instances.get(idx) {
             if instance.status != InstanceStatus::Running || !instance.started {
                 return;
-            }
-
-            // Keep tmux window sized to match preview pane
-            if let Ok((tw, th)) = crossterm::terminal::size() {
-                let preview_w = (tw * 70 / 100).saturating_sub(2);
-                let preview_h = th.saturating_sub(4);
-                if let Some(ref mut tmux) = instance.tmux_session {
-                    let _ = tmux.set_size(preview_w, preview_h);
-                }
             }
 
             // Preview: capture tmux pane content in background
@@ -763,15 +754,6 @@ impl App {
                         // Attach to the tmux session (fast -- just opens PTY)
                         if instance.restore_session().is_ok() {
                             instance.status = InstanceStatus::Running;
-                            // Resize tmux to match preview pane area
-                            if let Ok((tw, th)) = crossterm::terminal::size() {
-                                // Preview pane is ~70% of terminal width, minus borders
-                                let preview_w = (tw * 70 / 100).saturating_sub(2);
-                                let preview_h = th.saturating_sub(4); // tabs + menu + borders
-                                if let Some(ref mut tmux) = instance.tmux_session {
-                                    let _ = tmux.set_size(preview_w, preview_h);
-                                }
-                            }
                         } else {
                             instance.status = InstanceStatus::Ready;
                             self.error.set_error("Failed to attach to session".to_string());
