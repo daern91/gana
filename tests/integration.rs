@@ -80,8 +80,7 @@ fn test_debug_shows_config_values() {
         .success()
         .stdout(
             predicate::str::contains("claude")
-                .and(predicate::str::contains("1000"))
-                .and(predicate::str::contains("gana/")),
+                .and(predicate::str::contains("1000")),
         );
 }
 

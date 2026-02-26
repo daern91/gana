@@ -35,7 +35,7 @@ impl TextInputOverlay {
                 true
             }
             KeyCode::Char(c) => {
-                if self.input.len() < 32 {
+                if self.input.len() < 64 {
                     self.input.insert(self.cursor_pos, c);
                     self.cursor_pos += 1;
                 }

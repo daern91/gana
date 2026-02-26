@@ -58,9 +58,12 @@ impl GitWorktree {
             .trim()
             .to_string();
 
-        // Generate branch name
-        let sanitized = sanitize_branch_name(title);
-        let branch = format!("{}{}", config.branch_prefix, sanitized);
+        // Generate branch name: prefix + title (user types the branch name directly)
+        let branch = if config.branch_prefix.is_empty() {
+            title.to_string()
+        } else {
+            format!("{}{}", config.branch_prefix, sanitize_branch_name(title))
+        };
 
         // Generate unique worktree directory
         let nanos = SystemTime::now()
@@ -199,7 +202,7 @@ mod tests {
         let config = Config::default();
 
         let wt = GitWorktree::new_with_config(
-            "Test Feature",
+            "PRODIG-6989-test-feature",
             &path,
             "test-sess",
             &cmd,
@@ -211,7 +214,7 @@ mod tests {
         assert!(!wt.repo_path.is_empty());
         assert!(!wt.worktree_dir.is_empty());
         assert_eq!(wt.session_id, "test-sess");
-        assert!(wt.branch.contains("test-feature"));
+        assert_eq!(wt.branch, "PRODIG-6989-test-feature");
         assert!(!wt.base_commit.is_empty());
         // base_commit should be a hex SHA
         assert!(wt.base_commit.len() >= 7);

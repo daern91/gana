@@ -48,7 +48,7 @@ fn default_poll_interval() -> u64 {
 }
 
 fn default_branch_prefix() -> String {
-    "gana/".to_string()
+    String::new()
 }
 
 impl Default for Config {
@@ -156,11 +156,8 @@ mod tests {
         assert!(!config.default_program.is_empty());
         assert!(!config.auto_yes);
         assert_eq!(config.daemon_poll_interval, 1000);
-        assert!(!config.branch_prefix.is_empty());
-        assert!(
-            config.branch_prefix.ends_with('/'),
-            "branch_prefix should end with /"
-        );
+        // Default prefix is empty (user types the branch name directly)
+        assert!(config.branch_prefix.is_empty());
     }
 
     #[test]
