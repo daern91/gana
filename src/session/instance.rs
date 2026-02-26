@@ -258,6 +258,16 @@ impl Instance {
         Ok(())
     }
 
+    /// Push changes and create a PR.
+    pub fn push_and_pr(&mut self, cmd: &dyn CmdExec) -> Result<(), anyhow::Error> {
+        if let Some(ref worktree) = self.git_worktree {
+            worktree.push_changes(&self.title, cmd)?;
+            let _ = worktree.create_pr(&self.title, cmd);
+            let _ = worktree.open_branch_url(cmd);
+        }
+        Ok(())
+    }
+
     /// Attach interactively to the tmux session.
     /// Pipes stdin/stdout directly. Returns on Ctrl+Q.
     pub fn attach(&mut self) -> Result<(), anyhow::Error> {

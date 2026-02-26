@@ -96,6 +96,16 @@ impl GitWorktree {
         Ok(head_ref == format!("refs/heads/{}", self.branch))
     }
 
+    /// Create a pull request for this branch using `gh pr create`.
+    pub fn create_pr(&self, title: &str, cmd: &dyn CmdExec) -> Result<(), CmdError> {
+        cmd.run("gh", &args(&[
+            "pr", "create",
+            "--title", title,
+            "--body", &format!("Changes from gana session: {}", title),
+            "--head", &self.branch,
+        ]))
+    }
+
     /// Open the branch in the browser using `gh browse`.
     pub fn open_branch_url(&self, cmd: &dyn CmdExec) -> Result<(), CmdError> {
         cmd.run("gh", &args(&["browse", "-b", &self.branch]))
@@ -211,5 +221,21 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         wt.commit_changes("test commit", &mock).unwrap();
+    }
+
+    #[test]
+    fn test_create_pr_with_mock() {
+        let wt = make_worktree();
+        let mut mock = MockCmdExec::new();
+        mock.expect_run()
+            .withf(|name, cmd_args| {
+                name == "gh"
+                    && cmd_args.iter().any(|a| a == "pr")
+                    && cmd_args.iter().any(|a| a == "create")
+                    && cmd_args.iter().any(|a| a == "--head")
+            })
+            .returning(|_, _| Ok(()));
+
+        wt.create_pr("my feature", &mock).unwrap();
     }
 }

@@ -19,7 +19,16 @@ impl ListPane {
 
     /// Rebuild the rendered list items from a slice of instances.
     pub fn set_items(&mut self, instances: &[Instance]) {
-        self.items = instances.iter().map(|inst| render_instance(inst)).collect();
+        let repos: std::collections::HashSet<&str> = instances
+            .iter()
+            .filter_map(|i| i.git_worktree.as_ref().map(|w| w.repo_name()))
+            .collect();
+        let show_repo = repos.len() > 1;
+
+        self.items = instances
+            .iter()
+            .map(|inst| render_instance(inst, show_repo))
+            .collect();
         // Clamp selection
         if !self.items.is_empty() && self.selected >= self.items.len() {
             self.selected = self.items.len() - 1;
@@ -93,7 +102,10 @@ impl Widget for &ListPane {
 }
 
 /// Build a styled `ListItem` from an `Instance`.
-fn render_instance(inst: &Instance) -> ListItem<'static> {
+///
+/// When `show_repo` is true and the instance has a git worktree, the repo name
+/// is appended after the branch in parentheses (e.g. `[branch] (repo)`).
+fn render_instance(inst: &Instance, show_repo: bool) -> ListItem<'static> {
     let (icon, icon_style) = match inst.status {
         InstanceStatus::Running => ("●", Style::default().fg(Color::Green)),
         InstanceStatus::Ready => ("○", Style::default()),
@@ -113,6 +125,15 @@ fn render_instance(inst: &Instance) -> ListItem<'static> {
             format!("[{}]", inst.branch),
             Style::default().fg(Color::Cyan),
         ));
+    }
+
+    if show_repo {
+        if let Some(ref wt) = inst.git_worktree {
+            spans.push(Span::styled(
+                format!(" ({})", wt.repo_name()),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
 
     if let Some(ref stats) = inst.diff_stats {
@@ -281,5 +302,98 @@ mod tests {
         let smaller = vec![make_instance("one", InstanceStatus::Running, "")];
         pane.set_items(&smaller);
         assert_eq!(pane.selected_index(), 0);
+    }
+
+    fn make_instance_with_repo(
+        title: &str,
+        status: InstanceStatus,
+        branch: &str,
+        repo_path: &str,
+    ) -> Instance {
+        use crate::session::git::GitWorktree;
+        let mut inst = make_instance(title, status, branch);
+        inst.git_worktree = Some(GitWorktree::from_storage(
+            repo_path.to_string(),
+            "/wt".to_string(),
+            "s".to_string(),
+            branch.to_string(),
+            "abc".to_string(),
+        ));
+        inst
+    }
+
+    /// Render a single instance directly (bypassing set_items multi-repo detection)
+    /// and return the rendered text.
+    fn render_single_direct(inst: &Instance, show_repo: bool) -> String {
+        let item = render_instance(inst, show_repo);
+        let list = List::new(vec![item]);
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        Widget::render(list, area, &mut buf);
+        (0..80)
+            .map(|x| buf.cell((x, 0u16)).unwrap().symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_render_instance_multi_repo_shows_name() {
+        let inst = make_instance_with_repo(
+            "test",
+            InstanceStatus::Running,
+            "gana/test",
+            "/path/to/myrepo",
+        );
+        let text = render_single_direct(&inst, true);
+        assert!(text.contains("(myrepo)"), "Expected (myrepo) in: {}", text);
+    }
+
+    #[test]
+    fn test_render_instance_single_repo_hides_name() {
+        let inst = make_instance_with_repo(
+            "test",
+            InstanceStatus::Running,
+            "gana/test",
+            "/path/to/myrepo",
+        );
+        let text = render_single_direct(&inst, false);
+        assert!(
+            !text.contains("(myrepo)"),
+            "Should not contain repo name: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn test_set_items_detects_multi_repo() {
+        let instances = vec![
+            make_instance_with_repo("a", InstanceStatus::Running, "feat-a", "/repos/alpha"),
+            make_instance_with_repo("b", InstanceStatus::Running, "feat-b", "/repos/beta"),
+        ];
+        let content = render_list_row(&instances, 0);
+        assert!(
+            content.contains("(alpha)"),
+            "Expected (alpha) in: {}",
+            content
+        );
+        let content1 = render_list_row(&instances, 1);
+        assert!(
+            content1.contains("(beta)"),
+            "Expected (beta) in: {}",
+            content1
+        );
+    }
+
+    #[test]
+    fn test_set_items_single_repo_hides_name() {
+        let instances = vec![
+            make_instance_with_repo("a", InstanceStatus::Running, "feat-a", "/repos/same"),
+            make_instance_with_repo("b", InstanceStatus::Running, "feat-b", "/repos/same"),
+        ];
+        let content = render_list_row(&instances, 0);
+        assert!(
+            !content.contains("(same)"),
+            "Should not contain repo name: {}",
+            content
+        );
     }
 }

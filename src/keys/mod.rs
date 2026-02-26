@@ -12,6 +12,8 @@ pub enum KeyAction {
     Attach,
     Delete,
     Kill,
+    Pause,
+    Push,
     Prompt,
     Quit,
     Help,
@@ -36,6 +38,8 @@ impl KeyAction {
             KeyAction::Attach => "Attach to session",
             KeyAction::Delete => "Delete session",
             KeyAction::Kill => "Kill session",
+            KeyAction::Pause => "Pause/Resume session",
+            KeyAction::Push => "Push & create PR",
             KeyAction::Prompt => "New with prompt",
             KeyAction::Quit => "Quit",
             KeyAction::Help => "Toggle help",
@@ -60,6 +64,8 @@ impl KeyAction {
             KeyAction::Attach => "a",
             KeyAction::Delete => "d",
             KeyAction::Kill => "D",
+            KeyAction::Pause => "p",
+            KeyAction::Push => "P",
             KeyAction::Prompt => "N",
             KeyAction::Quit => "q",
             KeyAction::Help => "?",
@@ -98,6 +104,8 @@ pub fn map_key(event: KeyEvent) -> Option<KeyAction> {
         KeyCode::Char('a') => Some(KeyAction::Attach),
         KeyCode::Char('d') => Some(KeyAction::Delete),
         KeyCode::Char('D') => Some(KeyAction::Kill),
+        KeyCode::Char('p') => Some(KeyAction::Pause),
+        KeyCode::Char('P') => Some(KeyAction::Push),
         KeyCode::Char('N') => Some(KeyAction::Prompt),
         KeyCode::Char('q') => Some(KeyAction::Quit),
         KeyCode::Char('?') => Some(KeyAction::Help),
@@ -110,5 +118,22 @@ pub fn map_key(event: KeyEvent) -> Option<KeyAction> {
         }
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pause_key_mapping() {
+        let event = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE);
+        assert_eq!(map_key(event), Some(KeyAction::Pause));
+    }
+
+    #[test]
+    fn test_push_key_mapping() {
+        let event = KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT);
+        assert_eq!(map_key(event), Some(KeyAction::Push));
     }
 }

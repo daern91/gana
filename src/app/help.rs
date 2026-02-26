@@ -15,6 +15,8 @@ Session Management:
   N        New session with prompt
   d        Delete session
   D        Kill session (force)
+  p        Pause/Resume session
+  P        Push & create PR
   a        Attach to session
 
 Preview:

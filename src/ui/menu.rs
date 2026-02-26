@@ -27,6 +27,8 @@ const MENU_ITEMS: &[(&str, &str)] = &[
     ("a", "Attach"),
     ("d", "Delete"),
     ("D", "Kill"),
+    ("p", "Pause"),
+    ("P", "Push"),
     ("q", "Quit"),
     ("?", "Help"),
     ("Tab", "Switch"),
@@ -79,12 +81,12 @@ mod tests {
     #[test]
     fn test_menu_bar_renders() {
         let menu = MenuBar::new();
-        let area = Rect::new(0, 0, 80, 1);
+        let area = Rect::new(0, 0, 120, 1);
         let mut buf = Buffer::empty(area);
         Widget::render(&menu, area, &mut buf);
 
         // Verify the buffer contains key labels
-        let content: String = (0..80)
+        let content: String = (0..120)
             .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
             .collect();
         assert!(content.contains("n:New"));

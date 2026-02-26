@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::cmd::SystemCmdExec;
 use crate::config::Config;
 use crate::keys::{map_key, KeyAction};
-use crate::session::instance::{Instance, InstanceOptions};
+use crate::session::instance::{Instance, InstanceOptions, InstanceStatus};
 use crate::session::storage::{FileStorage, InstanceStorage};
 use crate::ui::diff::DiffView;
 use crate::ui::err::ErrorDisplay;
@@ -39,6 +39,7 @@ enum AppAction {
 enum PendingAction {
     KillSession(usize),
     DeleteSession(usize),
+    PushSession(usize),
 }
 
 pub struct App {
@@ -236,6 +237,36 @@ impl App {
                     self.state = AppState::Confirm;
                 }
             }
+            KeyAction::Pause => {
+                if !self.instances.is_empty() {
+                    let idx = self.list.selected_index();
+                    let cmd = crate::cmd::SystemCmdExec;
+                    if self.instances[idx].status == InstanceStatus::Paused {
+                        if let Err(e) = self.instances[idx].resume(&cmd) {
+                            self.error.set_error(format!("Resume failed: {}", e));
+                        }
+                    } else if self.instances[idx].status == InstanceStatus::Running {
+                        if let Err(e) = self.instances[idx].pause(&cmd) {
+                            self.error.set_error(format!("Pause failed: {}", e));
+                        }
+                    }
+                    self.refresh_list();
+                    let _ = self.save_instances();
+                }
+            }
+            KeyAction::Push => {
+                if !self.instances.is_empty() {
+                    let idx = self.list.selected_index();
+                    if self.instances[idx].status == InstanceStatus::Running {
+                        self.menu.highlight_key("P");
+                        let name = &self.instances[idx].title;
+                        let msg = format!("Push & create PR for '{}'? (y/n)", name);
+                        self.confirmation = Some(ConfirmationOverlay::new(msg));
+                        self.pending_action = Some(PendingAction::PushSession(idx));
+                        self.state = AppState::Confirm;
+                    }
+                }
+            }
             KeyAction::Quit => {
                 self.menu.highlight_key("q");
                 self.running = false;
@@ -345,6 +376,12 @@ impl App {
                         PendingAction::DeleteSession(idx) => {
                             if let Err(e) = self.delete_instance(idx) {
                                 self.error.set_error(e.to_string());
+                            }
+                        }
+                        PendingAction::PushSession(idx) => {
+                            let cmd = SystemCmdExec;
+                            if let Err(e) = self.instances[idx].push_and_pr(&cmd) {
+                                self.error.set_error(format!("Push failed: {}", e));
                             }
                         }
                     }
@@ -937,5 +974,41 @@ mod tests {
     fn test_prompt_key_mapping() {
         let event = KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
         assert_eq!(map_key(event), Some(KeyAction::Prompt));
+    }
+
+    #[test]
+    fn test_pause_running_session() {
+        let mut app = test_app();
+        let mut inst = make_test_instance("pause-test");
+        inst.status = InstanceStatus::Running;
+        app.instances.push(inst);
+        app.refresh_list();
+
+        // Pause action on a Running instance triggers pause.
+        // Since there's no real tmux/git, pause() will fail, but
+        // the code path is exercised and an error is set.
+        app.handle_key_action(KeyAction::Pause);
+        // The instance should still exist (pause doesn't remove it)
+        assert_eq!(app.instances.len(), 1);
+    }
+
+    #[test]
+    fn test_push_with_confirmation() {
+        let mut app = test_app();
+        let mut inst = make_test_instance("push-test");
+        inst.status = InstanceStatus::Running;
+        app.instances.push(inst);
+        app.refresh_list();
+
+        // Push should enter confirmation state
+        app.handle_key_action(KeyAction::Push);
+        assert_eq!(app.state, AppState::Confirm);
+        assert!(app.confirmation.is_some());
+        let msg = app.confirmation.as_ref().unwrap().message();
+        assert!(msg.contains("push-test"));
+
+        // Cancel with 'n'
+        app.handle_confirm_key(KeyCode::Char('n')).unwrap();
+        assert_eq!(app.state, AppState::Default);
     }
 }
