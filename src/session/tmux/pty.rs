@@ -24,7 +24,20 @@ impl PtyFactory for SystemPtyFactory {
         use std::os::unix::process::CommandExt;
         use std::process::Stdio;
 
-        let pty = openpty(None, None).map_err(|e: nix::Error| TmuxError::PtyError(e.to_string()))?;
+        // Get current terminal size so the PTY starts at the right dimensions.
+        // This is critical: tmux uses the smallest client to set window size,
+        // so if the PTY is 80x24 (default), the tmux window shrinks to that.
+        let winsize = crossterm::terminal::size().ok().map(|(cols, rows)| {
+            nix::pty::Winsize {
+                ws_row: rows,
+                ws_col: cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            }
+        });
+
+        let pty = openpty(winsize.as_ref(), None)
+            .map_err(|e: nix::Error| TmuxError::PtyError(e.to_string()))?;
 
         let slave_fd = pty.slave.into_raw_fd();
 
