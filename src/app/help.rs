@@ -12,6 +12,7 @@ Navigation:
 
 Session Management:
   n        New session
+  N        New session with prompt
   d        Delete session
   D        Kill session (force)
   a        Attach to session

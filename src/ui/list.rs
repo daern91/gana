@@ -115,6 +115,21 @@ fn render_instance(inst: &Instance) -> ListItem<'static> {
         ));
     }
 
+    if let Some(ref stats) = inst.diff_stats {
+        if stats.added_lines > 0 || stats.removed_lines > 0 {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("+{}", stats.added_lines),
+                Style::default().fg(Color::Green),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!("-{}", stats.removed_lines),
+                Style::default().fg(Color::Red),
+            ));
+        }
+    }
+
     ListItem::new(Line::from(spans))
 }
 
@@ -186,6 +201,68 @@ mod tests {
         pane.select_next();
         pane.select_previous();
         assert_eq!(pane.selected_index(), 0);
+    }
+
+    /// Helper to render a list pane with given instances and extract buffer text for a row.
+    fn render_list_row(instances: &[Instance], row: usize) -> String {
+        let mut pane = ListPane::new();
+        pane.set_items(instances);
+        // Use enough space: border takes 2 cols/2 rows
+        let area = Rect::new(0, 0, 80, (instances.len() as u16) + 2);
+        let mut buf = Buffer::empty(area);
+        Widget::render(&pane, area, &mut buf);
+        // Row 0 is top border, data rows start at y=1
+        let y = (row + 1) as u16;
+        (0..80)
+            .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_render_instance_with_diff_stats() {
+        use crate::session::git::DiffStats;
+
+        let mut inst = make_instance("feature", InstanceStatus::Running, "dev");
+        inst.diff_stats = Some(DiffStats {
+            content: String::new(),
+            added_lines: 15,
+            removed_lines: 3,
+            error: None,
+        });
+
+        let content = render_list_row(&[inst], 0);
+        assert!(content.contains("+15"), "Expected +15 in: {}", content);
+        assert!(content.contains("-3"), "Expected -3 in: {}", content);
+    }
+
+    #[test]
+    fn test_render_instance_without_diff_stats() {
+        let inst = make_instance("feature", InstanceStatus::Running, "dev");
+        let content = render_list_row(&[inst], 0);
+
+        // Should have branch but no diff stats
+        assert!(content.contains("[dev]"));
+        assert!(!content.contains("+0"));
+        assert!(!content.contains("-0"));
+    }
+
+    #[test]
+    fn test_render_instance_zero_diff_stats() {
+        use crate::session::git::DiffStats;
+
+        let mut inst = make_instance("feature", InstanceStatus::Running, "dev");
+        inst.diff_stats = Some(DiffStats {
+            content: String::new(),
+            added_lines: 0,
+            removed_lines: 0,
+            error: None,
+        });
+
+        let content = render_list_row(&[inst], 0);
+
+        // Zero stats should not be displayed
+        assert!(!content.contains("+0"));
+        assert!(!content.contains("-0"));
     }
 
     #[test]

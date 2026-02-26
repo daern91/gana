@@ -66,6 +66,10 @@ pub struct App {
 
     // Pending action after confirmation
     pending_action: Option<PendingAction>,
+
+    // Prompt flow state (N key: new session with initial prompt)
+    creating_with_prompt: bool,
+    pending_instance_title: Option<String>,
 }
 
 impl App {
@@ -87,6 +91,8 @@ impl App {
             text_input: None,
             help_overlay: None,
             pending_action: None,
+            creating_with_prompt: false,
+            pending_instance_title: None,
         }
     }
 
@@ -96,6 +102,16 @@ impl App {
         B::Error: Send + Sync + 'static,
     {
         self.load_instances()?;
+
+        // Show help on first run
+        let persistent_state = crate::config::state::AppState::load(&self.config_dir);
+        if !persistent_state.has_flag(crate::config::state::FLAG_HELP_SEEN) {
+            self.state = AppState::Help;
+            self.help_overlay = Some(TextOverlay::new("Welcome", help::help_text()));
+            let mut persistent_state = persistent_state;
+            persistent_state.set_flag(crate::config::state::FLAG_HELP_SEEN);
+            let _ = persistent_state.save(&self.config_dir);
+        }
 
         while self.running {
             terminal.draw(|frame| self.draw(frame))?;
@@ -180,11 +196,20 @@ impl App {
                 }
             }
             KeyAction::New => {
+                self.menu.highlight_key("n");
                 self.state = AppState::TextInput;
                 self.text_input = Some(TextInputOverlay::new("New Session"));
+                self.creating_with_prompt = false;
+            }
+            KeyAction::Prompt => {
+                self.menu.highlight_key("N");
+                self.state = AppState::TextInput;
+                self.text_input = Some(TextInputOverlay::new("New Session (with prompt)"));
+                self.creating_with_prompt = true;
             }
             KeyAction::Delete => {
                 if !self.instances.is_empty() {
+                    self.menu.highlight_key("d");
                     let idx = self.list.selected_index();
                     let name = &self.instances[idx].title;
                     let msg = format!("Delete session '{}'? (y/n)", name);
@@ -195,6 +220,7 @@ impl App {
             }
             KeyAction::Kill => {
                 if !self.instances.is_empty() {
+                    self.menu.highlight_key("D");
                     let idx = self.list.selected_index();
                     let name = &self.instances[idx].title;
                     let msg = format!("[!] Kill session '{}'? (y/n)", name);
@@ -204,16 +230,32 @@ impl App {
                 }
             }
             KeyAction::Quit => {
+                self.menu.highlight_key("q");
                 self.running = false;
             }
             KeyAction::Help => {
+                self.menu.highlight_key("?");
                 self.state = AppState::Help;
                 self.help_overlay = Some(TextOverlay::new("Help", help::help_text()));
             }
             KeyAction::Tab => {
+                self.menu.highlight_key("Tab");
                 self.tabbed_window.switch_tab();
             }
             KeyAction::ScrollUp => {
+                if !self.preview.is_scrolling() {
+                    // Entering scroll mode: fetch full history
+                    let history = self
+                        .instances
+                        .get(self.list.selected_index())
+                        .and_then(|inst| inst.preview_full_history());
+                    if let Some(history) = history {
+                        self.preview.enter_scroll_mode(&history);
+                    } else {
+                        // No full history available; enter scroll mode with current content
+                        self.preview.enter_scroll_mode("");
+                    }
+                }
                 self.preview.scroll_up(3);
             }
             KeyAction::ScrollDown => {
@@ -233,17 +275,41 @@ impl App {
             input.handle_key(key);
 
             if input.is_submitted() {
-                let name = input.input().to_string();
+                let text = input.input().to_string();
                 self.text_input = None;
-                self.state = AppState::Default;
-                if !name.is_empty()
-                    && let Err(e) = self.create_instance(name)
-                {
-                    self.error.set_error(e.to_string());
+
+                if self.creating_with_prompt && self.pending_instance_title.is_none() {
+                    // First input was the title, now get the prompt
+                    if !text.is_empty() {
+                        self.pending_instance_title = Some(text);
+                        self.text_input = Some(TextInputOverlay::new("Enter prompt"));
+                        // Stay in TextInput state
+                    } else {
+                        self.state = AppState::Default;
+                        self.creating_with_prompt = false;
+                    }
+                } else if self.creating_with_prompt && self.pending_instance_title.is_some() {
+                    // Second input was the prompt
+                    let title = self.pending_instance_title.take().unwrap();
+                    self.state = AppState::Default;
+                    self.creating_with_prompt = false;
+                    if let Err(e) = self.create_instance_with_prompt(title, text) {
+                        self.error.set_error(e.to_string());
+                    }
+                } else {
+                    // Normal new session (no prompt)
+                    self.state = AppState::Default;
+                    if !text.is_empty() {
+                        if let Err(e) = self.create_instance(text) {
+                            self.error.set_error(e.to_string());
+                        }
+                    }
                 }
             } else if input.is_cancelled() {
                 self.text_input = None;
                 self.state = AppState::Default;
+                self.creating_with_prompt = false;
+                self.pending_instance_title = None;
             }
         }
         Ok(())
@@ -381,6 +447,29 @@ impl App {
             auto_yes: self.config.auto_yes,
         });
         instance.start(true, &cmd)?;
+        self.instances.push(instance);
+        self.refresh_list();
+        self.save_instances()?;
+        Ok(())
+    }
+
+    fn create_instance_with_prompt(
+        &mut self,
+        title: String,
+        prompt: String,
+    ) -> anyhow::Result<()> {
+        let cmd = SystemCmdExec;
+        let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+        let mut instance = Instance::new(InstanceOptions {
+            title,
+            path: cwd,
+            program: self.config.default_program.clone(),
+            auto_yes: self.config.auto_yes,
+        });
+        instance.start(true, &cmd)?;
+        if !prompt.is_empty() {
+            instance.send_prompt(&prompt);
+        }
         self.instances.push(instance);
         self.refresh_list();
         self.save_instances()?;
@@ -695,5 +784,130 @@ mod tests {
         app.handle_key_action(KeyAction::Kill);
         let msg = app.confirmation.as_ref().unwrap().message();
         assert_eq!(msg, "[!] Kill session 'my-feature'? (y/n)");
+    }
+
+    #[test]
+    fn test_prompt_flow_two_step_input() {
+        let mut app = test_app();
+        assert_eq!(app.state, AppState::Default);
+
+        // Press 'N' for new session with prompt
+        app.handle_key_action(KeyAction::Prompt);
+        assert_eq!(app.state, AppState::TextInput);
+        assert!(app.creating_with_prompt);
+        assert!(app.text_input.is_some());
+
+        // Type a session name
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE))
+            .unwrap();
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.text_input.as_ref().unwrap().input(), "my");
+
+        // Submit the title
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        // Should now be asking for the prompt (second text input)
+        assert_eq!(app.state, AppState::TextInput);
+        assert!(app.text_input.is_some());
+        assert_eq!(app.pending_instance_title.as_deref(), Some("my"));
+        assert!(app.creating_with_prompt);
+
+        // The new input should be empty (fresh prompt input)
+        assert_eq!(app.text_input.as_ref().unwrap().input(), "");
+    }
+
+    #[test]
+    fn test_prompt_flow_cancel_at_title() {
+        let mut app = test_app();
+
+        app.handle_key_action(KeyAction::Prompt);
+        assert_eq!(app.state, AppState::TextInput);
+        assert!(app.creating_with_prompt);
+
+        // Cancel during title input
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.state, AppState::Default);
+        assert!(!app.creating_with_prompt);
+        assert!(app.pending_instance_title.is_none());
+    }
+
+    #[test]
+    fn test_prompt_flow_cancel_at_prompt() {
+        let mut app = test_app();
+
+        // Enter prompt flow, submit title
+        app.handle_key_action(KeyAction::Prompt);
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE))
+            .unwrap();
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.pending_instance_title.as_deref(), Some("t"));
+
+        // Cancel during prompt input
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.state, AppState::Default);
+        assert!(!app.creating_with_prompt);
+        assert!(app.pending_instance_title.is_none());
+    }
+
+    #[test]
+    fn test_prompt_flow_empty_title_cancels() {
+        let mut app = test_app();
+
+        app.handle_key_action(KeyAction::Prompt);
+
+        // Submit empty title
+        app.handle_text_input_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        // Should return to default (empty title cancels flow)
+        assert_eq!(app.state, AppState::Default);
+        assert!(!app.creating_with_prompt);
+    }
+
+    #[test]
+    fn test_first_run_help_shown() {
+        // Use a unique temp dir to ensure clean state
+        let dir = std::path::PathBuf::from("/tmp/league-test-first-run-help");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+
+        let app_state = crate::config::state::AppState::load(&dir);
+        assert!(!app_state.has_flag(crate::config::state::FLAG_HELP_SEEN));
+
+        // After marking as seen, it should be set
+        let mut app_state = app_state;
+        app_state.set_flag(crate::config::state::FLAG_HELP_SEEN);
+        let _ = app_state.save(&dir);
+
+        let app_state2 = crate::config::state::AppState::load(&dir);
+        assert!(app_state2.has_flag(crate::config::state::FLAG_HELP_SEEN));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_text_input_32_char_limit() {
+        let mut input = TextInputOverlay::new("Test");
+        // Type 32 characters
+        for _ in 0..32 {
+            input.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        }
+        assert_eq!(input.input().len(), 32);
+
+        // 33rd character should be rejected
+        input.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(input.input().len(), 32);
+    }
+
+    #[test]
+    fn test_prompt_key_mapping() {
+        let event = KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+        assert_eq!(map_key(event), Some(KeyAction::Prompt));
     }
 }

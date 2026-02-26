@@ -152,6 +152,49 @@ impl TmuxSession {
         self.ptmx = Some(ptmx);
         self.attached = true;
 
+        // Auto-respond to trust prompts (e.g. "Do you trust the files in this folder?")
+        self.handle_trust_prompt()?;
+
+        Ok(())
+    }
+
+    /// Poll for and auto-respond to trust prompts from AI programs.
+    ///
+    /// Different programs show different trust prompts on first launch:
+    /// - Claude: "Do you trust the files in this folder?" → Enter
+    /// - Aider/Gemini: "Open documentation url" → "d" then Enter
+    ///
+    /// Uses exponential backoff polling, matching the Go implementation.
+    fn handle_trust_prompt(&self) -> Result<(), TmuxError> {
+        let (search_string, response_keys, timeout_secs) = match self.program.as_str() {
+            "claude" => ("Do you trust the files in this folder?", vec!["Enter"], 30u64),
+            "aider" | "gemini" => ("Open documentation url", vec!["d", "Enter"], 45u64),
+            _ => return Ok(()), // No trust prompt handling for unknown programs
+        };
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let mut poll_interval = std::time::Duration::from_millis(100);
+
+        while start.elapsed() < timeout {
+            std::thread::sleep(poll_interval);
+
+            if let Ok(content) = self.capture_pane_content(false) {
+                if content.contains(search_string) {
+                    for key in &response_keys {
+                        self.send_keys(key)?;
+                    }
+                    return Ok(());
+                }
+            }
+
+            // Exponential backoff with cap at 1 second (matching Go: *= 1.2, cap 1s)
+            poll_interval = std::time::Duration::from_millis(
+                ((poll_interval.as_millis() as f64 * 1.2) as u64).min(1000),
+            );
+        }
+
+        // Timeout is not an error - the prompt may have been handled already
         Ok(())
     }
 
@@ -179,9 +222,9 @@ impl TmuxSession {
     /// Otherwise, captures only the visible pane content.
     pub fn capture_pane_content(&self, full_history: bool) -> Result<String, TmuxError> {
         let cmd_args = if full_history {
-            args(&["capture-pane", "-t", &self.sanitized_name, "-p", "-S", "-"])
+            args(&["capture-pane", "-p", "-e", "-J", "-t", &self.sanitized_name, "-S", "-"])
         } else {
-            args(&["capture-pane", "-t", &self.sanitized_name, "-p"])
+            args(&["capture-pane", "-p", "-e", "-J", "-t", &self.sanitized_name])
         };
         let output = self.cmd_exec.output("tmux", &cmd_args)?;
         Ok(output)
@@ -228,6 +271,8 @@ impl TmuxSession {
     /// After returning, calls `detach()` to restore a fresh monitoring PTY.
     pub fn attach_interactive(&mut self) -> Result<(), TmuxError> {
         use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
 
         let ptmx = match self.ptmx.as_ref() {
             Some(f) => f,
@@ -242,11 +287,14 @@ impl TmuxSession {
             .try_clone()
             .map_err(|e| TmuxError::PtyError(e.to_string()))?;
 
+        // Shared flag to stop the resize monitor thread
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
         // Channel to signal detach
         let (detach_tx, detach_rx) = std::sync::mpsc::channel::<()>();
         let detach_tx2 = detach_tx.clone();
 
-        // Goroutine 1: copy PTY output -> stdout
+        // Thread 1: copy PTY output -> stdout
         let stdout_handle = std::thread::spawn(move || {
             let mut stdout = std::io::stdout();
             let mut buf = [0u8; 4096];
@@ -263,7 +311,7 @@ impl TmuxSession {
             let _ = detach_tx2.send(());
         });
 
-        // Goroutine 2: read stdin, detect Ctrl+Q, forward rest to PTY
+        // Thread 2: read stdin, detect Ctrl+Q, forward rest to PTY
         let stdin_handle = std::thread::spawn(move || {
             let mut stdin = std::io::stdin().lock();
             let mut buf = [0u8; 32];
@@ -295,10 +343,52 @@ impl TmuxSession {
             }
         });
 
+        // Thread 3: monitor terminal size changes and resize tmux window
+        let session_name_for_resize = self.sanitized_name.clone();
+        let resize_stop = Arc::clone(&stop_flag);
+        let _resize_handle = std::thread::spawn(move || {
+            let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
+            // Do an initial resize to sync tmux with current terminal size
+            let _ = std::process::Command::new("tmux")
+                .args([
+                    "resize-window",
+                    "-t",
+                    &session_name_for_resize,
+                    "-x",
+                    &last_size.0.to_string(),
+                    "-y",
+                    &last_size.1.to_string(),
+                ])
+                .output();
+
+            while !resize_stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if let Ok(current_size) = crossterm::terminal::size() {
+                    if current_size != last_size {
+                        last_size = current_size;
+                        let _ = std::process::Command::new("tmux")
+                            .args([
+                                "resize-window",
+                                "-t",
+                                &session_name_for_resize,
+                                "-x",
+                                &current_size.0.to_string(),
+                                "-y",
+                                &current_size.1.to_string(),
+                            ])
+                            .output();
+                    }
+                }
+            }
+        });
+
         // Block until detach signal
         let _ = detach_rx.recv();
 
-        // Clean up threads (they'll exit when PTY closes)
+        // Signal the resize thread to stop
+        stop_flag.store(true, Ordering::Relaxed);
+
+        // Clean up threads (they'll exit when PTY closes or stop flag is set)
         // Don't join stdout_handle - it may be blocked on read
         drop(stdout_handle);
         drop(stdin_handle);
@@ -541,9 +631,10 @@ mod tests {
             }
         }
 
+        // Use "vim" to skip trust prompt polling (which would block on timeout)
         let mut session = TmuxSession::new(
             "test-session",
-            "claude",
+            "vim",
             Box::new(cmd_exec.clone()),
             Box::new(ArcPtyFactory(pty_factory)),
         );
@@ -571,9 +662,10 @@ mod tests {
         let cmd_exec = RecordingCmdExec::new();
         // has-session succeeds (session exists), so it should be killed
 
+        // Use "vim" to skip trust prompt polling (which would block on timeout)
         let mut session = TmuxSession::new(
             "existing",
-            "claude",
+            "vim",
             Box::new(cmd_exec.clone()),
             Box::new(MockPtyFactory::new()),
         );
@@ -605,6 +697,9 @@ mod tests {
         assert_eq!(commands[0].0, "tmux");
         assert!(commands[0].1.contains(&"capture-pane".to_string()));
         assert!(commands[0].1.contains(&"-p".to_string()));
+        // Must include -e (ANSI escape sequences) and -J (join wrapped lines)
+        assert!(commands[0].1.contains(&"-e".to_string()));
+        assert!(commands[0].1.contains(&"-J".to_string()));
         // Should NOT contain -S - when full_history is false
         assert!(!commands[0].1.contains(&"-S".to_string()));
     }
@@ -626,6 +721,9 @@ mod tests {
         let commands = cmd_exec.commands();
         assert!(commands[0].1.contains(&"-S".to_string()));
         assert!(commands[0].1.contains(&"-".to_string()));
+        // Must include -e (ANSI escape sequences) and -J (join wrapped lines)
+        assert!(commands[0].1.contains(&"-e".to_string()));
+        assert!(commands[0].1.contains(&"-J".to_string()));
     }
 
     #[test]
@@ -871,5 +969,103 @@ mod tests {
         assert!(session.ptmx.is_some());
         // But no longer attached
         assert!(!session.attached);
+    }
+
+    #[test]
+    fn test_capture_pane_includes_ansi_and_join_flags() {
+        // Verify that both normal and full_history capture include -e and -J
+        let cmd_exec =
+            RecordingCmdExec::with_output_responses(vec!["normal".into(), "history".into()]);
+        let session = TmuxSession::new(
+            "test-flags",
+            "claude",
+            Box::new(cmd_exec.clone()),
+            Box::new(MockPtyFactory::new()),
+        );
+
+        session.capture_pane_content(false).unwrap();
+        session.capture_pane_content(true).unwrap();
+
+        let commands = cmd_exec.commands();
+        // Normal capture (index 0)
+        assert!(commands[0].1.contains(&"-e".to_string()), "normal capture missing -e flag");
+        assert!(commands[0].1.contains(&"-J".to_string()), "normal capture missing -J flag");
+        assert!(!commands[0].1.contains(&"-S".to_string()), "normal capture should not have -S");
+
+        // Full history capture (index 1)
+        assert!(commands[1].1.contains(&"-e".to_string()), "full history missing -e flag");
+        assert!(commands[1].1.contains(&"-J".to_string()), "full history missing -J flag");
+        assert!(commands[1].1.contains(&"-S".to_string()), "full history missing -S flag");
+    }
+
+    #[test]
+    fn test_handle_trust_prompt_claude_detects_and_sends_enter() {
+        // Mock returns the Claude trust prompt on the first capture
+        let cmd_exec = RecordingCmdExec::with_output_responses(vec![
+            "Welcome to Claude\nDo you trust the files in this folder?\n> ".to_string(),
+        ]);
+
+        let session = TmuxSession::new(
+            "test-trust",
+            "claude",
+            Box::new(cmd_exec.clone()),
+            Box::new(MockPtyFactory::new()),
+        );
+
+        session.handle_trust_prompt().unwrap();
+
+        let commands = cmd_exec.commands();
+        // Should have: capture-pane (to detect prompt), then send-keys Enter
+        let capture_cmd = commands.iter().find(|(_, args)| args.contains(&"capture-pane".to_string()));
+        assert!(capture_cmd.is_some(), "should have captured pane content");
+
+        let send_cmd = commands.iter().find(|(_, args)| args.contains(&"send-keys".to_string()));
+        assert!(send_cmd.is_some(), "should have sent keys");
+        let send_args = &send_cmd.unwrap().1;
+        assert!(send_args.contains(&"Enter".to_string()), "should send Enter for claude");
+    }
+
+    #[test]
+    fn test_handle_trust_prompt_aider_sends_d_and_enter() {
+        let cmd_exec = RecordingCmdExec::with_output_responses(vec![
+            "Open documentation url for more info\n".to_string(),
+        ]);
+
+        let session = TmuxSession::new(
+            "test-trust-aider",
+            "aider",
+            Box::new(cmd_exec.clone()),
+            Box::new(MockPtyFactory::new()),
+        );
+
+        session.handle_trust_prompt().unwrap();
+
+        let commands = cmd_exec.commands();
+        let send_cmds: Vec<_> = commands
+            .iter()
+            .filter(|(_, args)| args.contains(&"send-keys".to_string()))
+            .collect();
+        // Aider sends "d" then "Enter"
+        assert_eq!(send_cmds.len(), 2, "aider should send two send-keys commands");
+        assert!(send_cmds[0].1.contains(&"d".to_string()), "first key should be 'd'");
+        assert!(send_cmds[1].1.contains(&"Enter".to_string()), "second key should be 'Enter'");
+    }
+
+    #[test]
+    fn test_handle_trust_prompt_unknown_program_skips() {
+        let cmd_exec = RecordingCmdExec::new();
+
+        let session = TmuxSession::new(
+            "test-trust-unknown",
+            "vim",
+            Box::new(cmd_exec.clone()),
+            Box::new(MockPtyFactory::new()),
+        );
+
+        session.handle_trust_prompt().unwrap();
+
+        // No commands should have been issued
+        let commands = cmd_exec.commands();
+        assert!(commands.is_empty(), "unknown program should skip trust prompt handling");
     }
 }

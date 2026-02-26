@@ -3,6 +3,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Renders tmux pane content with scroll support.
 pub struct PreviewPane {
+    normal_content: Vec<String>,
     content: Vec<String>,
     scroll_offset: usize,
     is_scrolling: bool,
@@ -13,6 +14,7 @@ pub struct PreviewPane {
 impl PreviewPane {
     pub fn new() -> Self {
         Self {
+            normal_content: Vec::new(),
             content: Vec::new(),
             scroll_offset: 0,
             is_scrolling: false,
@@ -22,8 +24,19 @@ impl PreviewPane {
     }
 
     /// Replace content by splitting text into lines.
+    /// When not scrolling, updates the displayed content immediately.
     pub fn set_content(&mut self, text: &str) {
-        self.content = text.lines().map(|l| l.to_string()).collect();
+        self.normal_content = text.lines().map(|l| l.to_string()).collect();
+        if !self.is_scrolling {
+            self.content = self.normal_content.clone();
+        }
+    }
+
+    /// Enter scroll mode with full history content.
+    pub fn enter_scroll_mode(&mut self, full_history: &str) {
+        self.content = full_history.lines().map(|l| l.to_string()).collect();
+        self.is_scrolling = true;
+        self.scroll_offset = 0;
     }
 
     pub fn set_size(&mut self, width: u16, height: u16) {
@@ -33,7 +46,6 @@ impl PreviewPane {
 
     pub fn scroll_up(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(amount);
-        self.is_scrolling = true;
         self.clamp_scroll();
     }
 
@@ -45,6 +57,7 @@ impl PreviewPane {
     }
 
     pub fn reset_scroll(&mut self) {
+        self.content = self.normal_content.clone();
         self.scroll_offset = 0;
         self.is_scrolling = false;
     }
@@ -135,6 +148,7 @@ mod tests {
         assert!(!preview.is_scrolling());
         assert_eq!(preview.scroll_offset(), 0);
 
+        preview.enter_scroll_mode(&content);
         preview.scroll_up(5);
         assert!(preview.is_scrolling());
         assert_eq!(preview.scroll_offset(), 5);
@@ -159,10 +173,12 @@ mod tests {
     #[test]
     fn test_preview_scroll_clamp() {
         let mut preview = PreviewPane::new();
-        preview.set_content("line 0\nline 1\nline 2");
+        let content = "line 0\nline 1\nline 2";
+        preview.set_content(content);
         preview.set_size(80, 30);
 
-        // Scroll beyond content should clamp
+        // Enter scroll mode then scroll beyond content should clamp
+        preview.enter_scroll_mode(content);
         preview.scroll_up(1000);
         assert!(preview.is_scrolling());
         assert_eq!(preview.scroll_offset(), 2); // max is len-1
@@ -171,9 +187,11 @@ mod tests {
     #[test]
     fn test_preview_scroll_down_to_zero_exits_scroll_mode() {
         let mut preview = PreviewPane::new();
-        preview.set_content("a\nb\nc");
+        let content = "a\nb\nc";
+        preview.set_content(content);
         preview.set_size(80, 30);
 
+        preview.enter_scroll_mode(content);
         preview.scroll_up(2);
         assert!(preview.is_scrolling());
 
@@ -192,5 +210,53 @@ mod tests {
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
         Widget::render(&preview, area, &mut buf);
+    }
+
+    #[test]
+    fn test_enter_scroll_mode_uses_full_history() {
+        let mut preview = PreviewPane::new();
+        preview.set_content("recent line 1\nrecent line 2");
+        preview.set_size(80, 30);
+
+        let full_history = "old line 1\nold line 2\nold line 3\nrecent line 1\nrecent line 2";
+        preview.enter_scroll_mode(full_history);
+
+        assert!(preview.is_scrolling());
+        assert_eq!(preview.content.len(), 5);
+        assert_eq!(preview.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn test_reset_scroll_restores_normal_content() {
+        let mut preview = PreviewPane::new();
+        preview.set_content("normal 1\nnormal 2");
+        assert_eq!(preview.content.len(), 2);
+
+        let full_history = "hist 1\nhist 2\nhist 3\nnormal 1\nnormal 2";
+        preview.enter_scroll_mode(full_history);
+        assert_eq!(preview.content.len(), 5);
+
+        preview.reset_scroll();
+        assert!(!preview.is_scrolling());
+        assert_eq!(preview.content.len(), 2);
+        assert_eq!(preview.content[0], "normal 1");
+    }
+
+    #[test]
+    fn test_set_content_during_scroll_does_not_change_displayed() {
+        let mut preview = PreviewPane::new();
+        preview.set_content("initial");
+
+        preview.enter_scroll_mode("full history line 1\nfull history line 2");
+        assert_eq!(preview.content.len(), 2);
+
+        // set_content during scroll should update normal_content but not displayed content
+        preview.set_content("updated 1\nupdated 2\nupdated 3");
+        assert_eq!(preview.content.len(), 2); // still showing full history
+        assert_eq!(preview.normal_content.len(), 3);
+
+        preview.reset_scroll();
+        assert_eq!(preview.content.len(), 3); // now shows updated normal content
+        assert_eq!(preview.content[0], "updated 1");
     }
 }

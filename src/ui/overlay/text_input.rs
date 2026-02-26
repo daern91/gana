@@ -35,8 +35,10 @@ impl TextInputOverlay {
                 true
             }
             KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
+                if self.input.len() < 32 {
+                    self.input.insert(self.cursor_pos, c);
+                    self.cursor_pos += 1;
+                }
                 true
             }
             KeyCode::Backspace => {
@@ -105,9 +107,13 @@ impl TextInputOverlay {
             Span::raw(after_cursor),
         ]);
 
+        let counter = format!("({}/32)", self.input.len());
         let text = Paragraph::new(vec![
             input_line,
-            Line::from(""),
+            Line::from(Span::styled(
+                counter,
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(vec![
                 Span::styled("[Enter]", Style::default().fg(Color::Green).bold()),
                 Span::raw(" Submit  "),
