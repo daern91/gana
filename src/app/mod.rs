@@ -42,6 +42,7 @@ enum BackgroundUpdate {
     DiffComputed(usize, DiffStats),
     InstanceReady(usize, crate::session::git::GitWorktree),
     InstanceFailed(usize, String),
+    SessionDied(usize),
 }
 
 /// Action pending confirmation.
@@ -716,13 +717,20 @@ impl App {
                 return;
             }
 
-            // Preview: capture tmux pane content in background
+            // Preview: check session exists, then capture pane content
             let title = instance.title.clone();
             let sender = self.bg_sender.clone();
             let s1 = sender.clone();
             std::thread::spawn(move || {
                 let sanitized = crate::session::tmux::sanitize_name(&title);
                 let cmd = SystemCmdExec;
+
+                // Check if tmux session still exists
+                if cmd.run("tmux", &args(&["has-session", "-t", &sanitized])).is_err() {
+                    let _ = s1.send(BackgroundUpdate::SessionDied(idx));
+                    return;
+                }
+
                 if let Ok(content) = cmd.output(
                     "tmux",
                     &args(&["capture-pane", "-p", "-e", "-J", "-t", &sanitized]),
@@ -793,6 +801,17 @@ impl App {
                         self.refresh_list();
                     }
                     self.error.set_error(format!("Session creation failed: {}", msg));
+                }
+                BackgroundUpdate::SessionDied(idx) => {
+                    if let Some(instance) = self.instances.get_mut(idx) {
+                        if instance.status == InstanceStatus::Running {
+                            instance.status = InstanceStatus::Ready;
+                            instance.tmux_session = None;
+                            instance.started = false;
+                            self.refresh_list();
+                            let _ = self.save_instances();
+                        }
+                    }
                 }
             }
         }
