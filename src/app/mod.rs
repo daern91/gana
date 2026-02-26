@@ -43,6 +43,7 @@ enum BackgroundUpdate {
     InstanceReady(usize, crate::session::git::GitWorktree),
     InstanceFailed(usize, String),
     SessionDied(usize),
+    SessionRestarted(usize),
 }
 
 /// Action pending confirmation.
@@ -263,7 +264,55 @@ impl App {
             KeyAction::Down => self.list.select_next(),
             KeyAction::Enter | KeyAction::Attach => {
                 if !self.instances.is_empty() {
-                    return AppAction::AttachSession(self.list.selected_index());
+                    let idx = self.list.selected_index();
+                    if idx < self.instances.len() {
+                        let status = self.instances[idx].status;
+                        if status == InstanceStatus::Running {
+                            return AppAction::AttachSession(idx);
+                        } else if status == InstanceStatus::Ready {
+                            // Session died — restart Claude in existing worktree
+                            if let Some(ref wt) = self.instances[idx].git_worktree {
+                                let worktree_path = wt.worktree_path().to_string();
+                                let title = self.instances[idx].title.clone();
+                                let program = self.instances[idx].program.clone();
+                                let sender = self.bg_sender.clone();
+
+                                self.instances[idx].status = InstanceStatus::Loading;
+                                self.refresh_list();
+
+                                std::thread::spawn(move || {
+                                    let cmd = SystemCmdExec;
+                                    let sanitized =
+                                        crate::session::tmux::sanitize_name(&title);
+                                    let _ = cmd.run(
+                                        "tmux",
+                                        &args(&["kill-session", "-t", &sanitized]),
+                                    );
+                                    if let Err(e) = cmd.run(
+                                        "tmux",
+                                        &args(&[
+                                            "new-session", "-d", "-s", &sanitized,
+                                            "-c", &worktree_path, &program,
+                                        ]),
+                                    ) {
+                                        let _ = sender.send(
+                                            BackgroundUpdate::InstanceFailed(
+                                                idx,
+                                                e.to_string(),
+                                            ),
+                                        );
+                                        return;
+                                    }
+                                    // Re-use existing worktree — just signal ready
+                                    // (InstanceReady expects a GitWorktree but we
+                                    // already have one; send a RestartReady instead)
+                                    let _ = sender.send(
+                                        BackgroundUpdate::SessionRestarted(idx),
+                                    );
+                                });
+                            }
+                        }
+                    }
                 }
             }
             KeyAction::New => {
@@ -811,6 +860,18 @@ impl App {
                             self.refresh_list();
                             let _ = self.save_instances();
                         }
+                    }
+                }
+                BackgroundUpdate::SessionRestarted(idx) => {
+                    if let Some(instance) = self.instances.get_mut(idx) {
+                        // Attach PTY to the restarted tmux session
+                        if instance.restore_session().is_ok() {
+                            instance.status = InstanceStatus::Running;
+                        } else {
+                            instance.status = InstanceStatus::Ready;
+                        }
+                        self.refresh_list();
+                        let _ = self.save_instances();
                     }
                 }
             }
