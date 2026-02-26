@@ -32,6 +32,16 @@ impl PreviewPane {
         }
     }
 
+    /// Set the preview to the fallback Ganesha art (shown when no session is selected).
+    pub fn set_fallback(&mut self) {
+        self.set_content(crate::ui::consts::FALLBACK_TEXT);
+    }
+
+    /// Returns true when there is no content to display.
+    pub fn is_empty(&self) -> bool {
+        self.normal_content.is_empty()
+    }
+
     /// Enter scroll mode with full history content.
     pub fn enter_scroll_mode(&mut self, full_history: &str) {
         self.content = full_history.lines().map(|l| l.to_string()).collect();

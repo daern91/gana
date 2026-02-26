@@ -103,6 +103,9 @@ impl App {
     {
         self.load_instances()?;
 
+        // Show Ganesha fallback art when there are no sessions
+        self.preview.set_fallback();
+
         // Show help on first run
         let persistent_state = crate::config::state::AppState::load(&self.config_dir);
         if !persistent_state.has_flag(crate::config::state::FLAG_HELP_SEEN) {
@@ -530,6 +533,11 @@ impl App {
             instance.update_diff_stats(&cmd);
             if let Some(stats) = instance.get_diff_stats() {
                 self.diff_view.set_diff(stats);
+            }
+        } else {
+            // No instance selected -- show fallback Ganesha art
+            if self.preview.is_empty() {
+                self.preview.set_fallback();
             }
         }
         Ok(())
