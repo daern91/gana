@@ -12,6 +12,8 @@ use crate::session::tmux::TmuxSession;
 pub enum InstanceStatus {
     Ready,
     Running,
+    /// Session is running but content has stopped changing (waiting for user input).
+    Waiting,
     Loading,
     Paused,
 }
@@ -21,6 +23,7 @@ impl std::fmt::Display for InstanceStatus {
         match self {
             InstanceStatus::Ready => write!(f, "ready"),
             InstanceStatus::Running => write!(f, "running"),
+            InstanceStatus::Waiting => write!(f, "waiting"),
             InstanceStatus::Loading => write!(f, "loading"),
             InstanceStatus::Paused => write!(f, "paused"),
         }

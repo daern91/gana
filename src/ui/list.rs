@@ -120,7 +120,11 @@ impl Widget for &ListPane {
 /// is appended after the branch in parentheses (e.g. `[branch] (repo)`).
 fn render_instance(inst: &Instance, show_repo: bool, spinner_tick: usize) -> ListItem<'static> {
     let (icon, icon_style) = match inst.status {
-        InstanceStatus::Running => ("●".to_string(), Style::default().fg(Color::Green)),
+        InstanceStatus::Running => {
+            let frame = SPINNER_FRAMES[spinner_tick % SPINNER_FRAMES.len()];
+            (frame.to_string(), Style::default().fg(Color::Yellow))
+        }
+        InstanceStatus::Waiting => ("●".to_string(), Style::default().fg(Color::Green)),
         InstanceStatus::Ready => ("○".to_string(), Style::default()),
         InstanceStatus::Loading => {
             let frame = SPINNER_FRAMES[spinner_tick % SPINNER_FRAMES.len()];

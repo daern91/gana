@@ -40,6 +40,8 @@ enum AppAction {
 /// Background update messages from worker threads.
 enum BackgroundUpdate {
     PreviewContent(usize, String),
+    /// Whether the tmux pane content changed since last check, plus the new hash.
+    ContentChanged(usize, bool, String),
     DiffComputed(usize, DiffStats),
     InstanceReady(usize, crate::session::git::GitWorktree),
     InstanceFailed(usize, String),
@@ -93,6 +95,9 @@ pub struct App {
     // Background update channels (async tick to prevent TUI freezing)
     bg_sender: mpsc::Sender<BackgroundUpdate>,
     bg_receiver: mpsc::Receiver<BackgroundUpdate>,
+
+    // Content hashes for activity detection (Running vs Waiting status)
+    content_hashes: std::collections::HashMap<usize, String>,
 }
 
 impl App {
@@ -122,6 +127,7 @@ impl App {
             pending_prompts: std::collections::HashMap::new(),
             bg_sender,
             bg_receiver,
+            content_hashes: std::collections::HashMap::new(),
         }
     }
 
@@ -147,6 +153,7 @@ impl App {
         }
 
         let mut last_bg_tick = Instant::now();
+        let mut last_save_tick = Instant::now();
 
         while self.running {
             terminal.draw(|frame| self.draw(frame))?;
@@ -230,6 +237,12 @@ impl App {
                 self.schedule_background_updates();
                 last_bg_tick = Instant::now();
             }
+
+            // Periodic save every 30s to prevent data loss on crash/freeze
+            if last_save_tick.elapsed() >= Duration::from_secs(30) {
+                let _ = self.save_instances();
+                last_save_tick = Instant::now();
+            }
         }
 
         // Save state on exit so sessions persist across restarts
@@ -276,12 +289,15 @@ impl App {
                     let idx = self.list.selected_index();
                     if idx < self.instances.len() {
                         let status = self.instances[idx].status;
-                        if status == InstanceStatus::Running {
+                        if status == InstanceStatus::Running
+                            || status == InstanceStatus::Waiting
+                        {
                             return AppAction::AttachSession(idx);
                         } else if status == InstanceStatus::Ready {
-                            // Session died — restart Claude in existing worktree
+                            // Session died — recreate worktree, restart Claude,
+                            // and resume the last conversation if available.
                             if let Some(ref wt) = self.instances[idx].git_worktree {
-                                let worktree_path = wt.worktree_path().to_string();
+                                let worktree = wt.clone();
                                 let title = self.instances[idx].title.clone();
                                 let program = self.instances[idx].program.clone();
                                 let sender = self.bg_sender.clone();
@@ -291,17 +307,40 @@ impl App {
 
                                 std::thread::spawn(move || {
                                     let cmd = SystemCmdExec;
+
+                                    // Recreate worktree directory from the branch
+                                    if let Err(e) = worktree.setup(&cmd) {
+                                        let _ = sender.send(
+                                            BackgroundUpdate::InstanceFailed(
+                                                idx,
+                                                format!("worktree setup failed: {}", e),
+                                            ),
+                                        );
+                                        return;
+                                    }
+
+                                    let worktree_path = worktree.worktree_path().to_string();
                                     let sanitized =
                                         crate::session::tmux::sanitize_name(&title);
                                     let _ = cmd.run(
                                         "tmux",
                                         &args(&["kill-session", "-t", &sanitized]),
                                     );
+
+                                    // Find last conversation ID for this session
+                                    let launch_cmd = if program == "claude" {
+                                        find_last_conversation(&title)
+                                            .map(|id| format!("claude --resume {}", id))
+                                            .unwrap_or_else(|| "claude".to_string())
+                                    } else {
+                                        program
+                                    };
+
                                     if let Err(e) = cmd.run(
                                         "tmux",
                                         &args(&[
                                             "new-session", "-d", "-s", &sanitized,
-                                            "-c", &worktree_path, &program,
+                                            "-c", &worktree_path, &launch_cmd,
                                         ]),
                                     ) {
                                         let _ = sender.send(
@@ -312,9 +351,6 @@ impl App {
                                         );
                                         return;
                                     }
-                                    // Re-use existing worktree — just signal ready
-                                    // (InstanceReady expects a GitWorktree but we
-                                    // already have one; send a RestartReady instead)
                                     let _ = sender.send(
                                         BackgroundUpdate::SessionRestarted(idx),
                                     );
@@ -366,7 +402,9 @@ impl App {
                         if let Err(e) = self.instances[idx].resume(&cmd) {
                             self.error.set_error(format!("Resume failed: {}", e));
                         }
-                    } else if self.instances[idx].status == InstanceStatus::Running {
+                    } else if self.instances[idx].status == InstanceStatus::Running
+                        || self.instances[idx].status == InstanceStatus::Waiting
+                    {
                         if let Err(e) = self.instances[idx].pause(&cmd) {
                             self.error.set_error(format!("Pause failed: {}", e));
                         }
@@ -379,7 +417,10 @@ impl App {
                 if !self.instances.is_empty() {
                     let idx = self.list.selected_index();
                     let status = self.instances[idx].status;
-                    if status == InstanceStatus::Running || status == InstanceStatus::Ready {
+                    if status == InstanceStatus::Running
+                        || status == InstanceStatus::Waiting
+                        || status == InstanceStatus::Ready
+                    {
                         self.menu.highlight_key("r");
                         self.restart_overlay = Some(crate::ui::overlay::RestartOverlay::new());
                         self.restart_idx = Some(idx);
@@ -390,7 +431,9 @@ impl App {
             KeyAction::Push => {
                 if !self.instances.is_empty() {
                     let idx = self.list.selected_index();
-                    if self.instances[idx].status == InstanceStatus::Running {
+                    if self.instances[idx].status == InstanceStatus::Running
+                        || self.instances[idx].status == InstanceStatus::Waiting
+                    {
                         self.menu.highlight_key("P");
                         let name = &self.instances[idx].title;
                         let msg = format!("Push & create PR for '{}'? (y/n)", name);
@@ -414,26 +457,34 @@ impl App {
                 self.tabbed_window.switch_tab();
             }
             KeyAction::ScrollUp => {
-                if !self.preview.is_scrolling() {
-                    // Entering scroll mode: fetch full history
-                    let history = self
-                        .instances
-                        .get(self.list.selected_index())
-                        .and_then(|inst| inst.preview_full_history());
-                    if let Some(history) = history {
-                        self.preview.enter_scroll_mode(&history);
-                    } else {
-                        // No full history available; enter scroll mode with current content
-                        self.preview.enter_scroll_mode("");
+                if self.tabbed_window.active_tab() == Tab::Diff {
+                    self.diff_view.scroll_up(3);
+                } else {
+                    if !self.preview.is_scrolling() {
+                        // Entering scroll mode: fetch full history
+                        let history = self
+                            .instances
+                            .get(self.list.selected_index())
+                            .and_then(|inst| inst.preview_full_history());
+                        if let Some(history) = history {
+                            self.preview.enter_scroll_mode(&history);
+                        } else {
+                            self.preview.enter_scroll_mode("");
+                        }
                     }
+                    self.preview.scroll_up(3);
                 }
-                self.preview.scroll_up(3);
             }
             KeyAction::ScrollDown => {
-                self.preview.scroll_down(3);
+                if self.tabbed_window.active_tab() == Tab::Diff {
+                    self.diff_view.scroll_down(3);
+                } else {
+                    self.preview.scroll_down(3);
+                }
             }
             KeyAction::Cancel => {
                 self.preview.reset_scroll();
+                self.diff_view.reset_scroll();
             }
             _ => {}
         }
@@ -830,15 +881,18 @@ impl App {
     }
 
     /// Reconnect loaded instances to their still-running tmux sessions.
-    /// If a tmux session no longer exists, mark the instance as Ready.
+    /// If a tmux session no longer exists, mark the instance as Ready but
+    /// keep `started = true` so it's preserved in the next save. The user
+    /// can then see the session and restart it if the worktree still exists.
     fn restore_loaded_instances(&mut self) {
         use crate::session::InstanceStatus;
         for instance in &mut self.instances {
-            if instance.status == InstanceStatus::Running {
+            if instance.status == InstanceStatus::Running
+                || instance.status == InstanceStatus::Waiting
+            {
                 if instance.restore_session().is_err() {
-                    // tmux session is gone — mark as not running
+                    // tmux session is gone — mark as not running but keep persisted
                     instance.status = InstanceStatus::Ready;
-                    instance.started = false;
                 }
             }
         }
@@ -869,23 +923,29 @@ impl App {
     /// Results arrive via `bg_sender` channel and are processed by
     /// `process_background_updates()`.
     fn schedule_background_updates(&self) {
-        let idx = self.list.selected_index();
-        if let Some(instance) = self.instances.get(idx) {
-            if instance.status != InstanceStatus::Running || !instance.started {
-                return;
+        let selected_idx = self.list.selected_index();
+
+        for (idx, instance) in self.instances.iter().enumerate() {
+            let is_active = instance.status == InstanceStatus::Running
+                || instance.status == InstanceStatus::Waiting;
+            if !is_active || !instance.started {
+                continue;
             }
 
-            // Preview: check session exists, then capture pane content
             let title = instance.title.clone();
             let sender = self.bg_sender.clone();
-            let s1 = sender.clone();
+            let prev_hash = self.content_hashes.get(&idx).cloned().unwrap_or_default();
+            let is_selected = idx == selected_idx;
+
             std::thread::spawn(move || {
+                use sha2::{Digest, Sha256};
+
                 let sanitized = crate::session::tmux::sanitize_name(&title);
                 let cmd = SystemCmdExec;
 
                 // Check if tmux session still exists
                 if cmd.run("tmux", &args(&["has-session", "-t", &sanitized])).is_err() {
-                    let _ = s1.send(BackgroundUpdate::SessionDied(idx));
+                    let _ = sender.send(BackgroundUpdate::SessionDied(idx));
                     return;
                 }
 
@@ -893,18 +953,28 @@ impl App {
                     "tmux",
                     &args(&["capture-pane", "-p", "-e", "-J", "-t", &sanitized]),
                 ) {
-                    let _ = s1.send(BackgroundUpdate::PreviewContent(idx, content));
+                    // Check if content changed (for Running vs Waiting status)
+                    let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+                    let changed = hash != prev_hash;
+                    let _ = sender.send(BackgroundUpdate::ContentChanged(idx, changed, hash));
+
+                    if is_selected {
+                        let _ = sender.send(BackgroundUpdate::PreviewContent(idx, content));
+                    }
                 }
             });
 
-            // Diff: compute git diff in background
-            if let Some(ref worktree) = instance.git_worktree {
-                let wt = worktree.clone();
-                std::thread::spawn(move || {
-                    let cmd = SystemCmdExec;
-                    let stats = wt.diff(&cmd);
-                    let _ = sender.send(BackgroundUpdate::DiffComputed(idx, stats));
-                });
+            // Diff: only for selected instance
+            if is_selected {
+                if let Some(ref worktree) = instance.git_worktree {
+                    let wt = worktree.clone();
+                    let sender2 = self.bg_sender.clone();
+                    std::thread::spawn(move || {
+                        let cmd = SystemCmdExec;
+                        let stats = wt.diff(&cmd);
+                        let _ = sender2.send(BackgroundUpdate::DiffComputed(idx, stats));
+                    });
+                }
             }
         }
     }
@@ -914,6 +984,24 @@ impl App {
     fn process_background_updates(&mut self) {
         while let Ok(update) = self.bg_receiver.try_recv() {
             match update {
+                BackgroundUpdate::ContentChanged(idx, changed, hash) => {
+                    self.content_hashes.insert(idx, hash);
+                    if let Some(instance) = self.instances.get_mut(idx) {
+                        let is_active = instance.status == InstanceStatus::Running
+                            || instance.status == InstanceStatus::Waiting;
+                        if is_active {
+                            let new_status = if changed {
+                                InstanceStatus::Running
+                            } else {
+                                InstanceStatus::Waiting
+                            };
+                            if instance.status != new_status {
+                                instance.status = new_status;
+                                self.refresh_list();
+                            }
+                        }
+                    }
+                }
                 BackgroundUpdate::PreviewContent(idx, content) => {
                     if idx == self.list.selected_index() {
                         self.preview.set_content(&content);
@@ -962,10 +1050,13 @@ impl App {
                 }
                 BackgroundUpdate::SessionDied(idx) => {
                     if let Some(instance) = self.instances.get_mut(idx) {
-                        if instance.status == InstanceStatus::Running {
+                        if instance.status == InstanceStatus::Running
+                            || instance.status == InstanceStatus::Waiting
+                        {
                             instance.status = InstanceStatus::Ready;
                             instance.tmux_session = None;
-                            instance.started = false;
+                            // Keep started=true so the instance is preserved in saves.
+                            // The user can restart it or delete it manually.
                             self.refresh_list();
                             let _ = self.save_instances();
                         }
@@ -1006,6 +1097,68 @@ pub fn run(config: Config, config_dir: std::path::PathBuf) -> anyhow::Result<()>
     )?;
 
     result
+}
+
+/// Find the most recent Claude conversation ID for a session.
+///
+/// Claude Code stores conversations in `~/.claude/projects/{encoded_path}/`.
+/// Since worktree paths include a timestamp that changes on each recreation,
+/// we search ALL project directories matching the session name prefix and
+/// return the most recent conversation across all of them.
+fn find_last_conversation(session_name: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let projects_dir = std::path::Path::new(&home).join(".claude").join("projects");
+
+    // Build the prefix to match: encode the gana worktrees base path without the timestamp.
+    // The config dir path (e.g. /Users/daniel/.gana) gets encoded by replacing /._  with -
+    let config_dir = crate::config::get_config_dir().ok()?;
+    let worktrees_base = format!("{}/worktrees/{}", config_dir.display(), session_name);
+    let encoded_prefix: String = worktrees_base
+        .chars()
+        .map(|c| match c {
+            '/' | '.' | '_' => '-',
+            _ => c,
+        })
+        .collect();
+    let prefix = format!("{}-", encoded_prefix);
+
+    // Search all matching project directories for the newest conversation
+    let mut newest: Option<(std::time::SystemTime, String)> = None;
+    if let Ok(entries) = std::fs::read_dir(&projects_dir) {
+        for entry in entries.flatten() {
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            if !dir_name.starts_with(&prefix) {
+                continue;
+            }
+            let dir_path = entry.path();
+            if !dir_path.is_dir() {
+                continue;
+            }
+
+            // Find .jsonl files in this project directory
+            if let Ok(files) = std::fs::read_dir(&dir_path) {
+                for file in files.flatten() {
+                    let path = file.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                        if let Ok(meta) = path.metadata() {
+                            if let Ok(modified) = meta.modified() {
+                                let stem = path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                if newest.as_ref().map_or(true, |(t, _)| modified > *t) {
+                                    newest = Some((modified, stem));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    newest.map(|(_, id)| id)
 }
 
 // ── Test support ────────────────────────────────────────────────────

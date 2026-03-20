@@ -3,11 +3,12 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::session::git::diff::DiffStats;
 
-/// Renders colored git diff output.
+/// Renders colored git diff output with scroll support.
 pub struct DiffView {
     content: String,
     added: usize,
     removed: usize,
+    scroll_offset: usize,
 }
 
 impl DiffView {
@@ -16,6 +17,7 @@ impl DiffView {
             content: String::new(),
             added: 0,
             removed: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -29,6 +31,19 @@ impl DiffView {
     /// Summary string like "+15 -3".
     pub fn summary(&self) -> String {
         format!("+{} -{}", self.added, self.removed)
+    }
+
+    pub fn scroll_up(&mut self, amount: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    }
+
+    pub fn scroll_down(&mut self, amount: usize) {
+        let max = self.content.lines().count().saturating_sub(1);
+        self.scroll_offset = (self.scroll_offset + amount).min(max);
+    }
+
+    pub fn reset_scroll(&mut self) {
+        self.scroll_offset = 0;
     }
 }
 
@@ -45,6 +60,7 @@ impl Widget for &DiffView {
         let lines: Vec<Line<'_>> = self
             .content
             .lines()
+            .skip(self.scroll_offset)
             .map(|line| {
                 let style = classify_diff_line(line);
                 Line::from(Span::styled(line, style))

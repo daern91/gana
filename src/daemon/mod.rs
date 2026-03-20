@@ -32,7 +32,8 @@ pub fn run_daemon(config_dir: &Path, config: &Config) -> anyhow::Result<()> {
     while !SHUTDOWN.load(Ordering::SeqCst) {
         if let Ok(mut instances) = storage.load_instances() {
             for instance in instances.iter_mut() {
-                if instance.status == InstanceStatus::Running
+                if (instance.status == InstanceStatus::Running
+                    || instance.status == InstanceStatus::Waiting)
                     && instance.auto_yes
                     && instance.has_updated()
                 {

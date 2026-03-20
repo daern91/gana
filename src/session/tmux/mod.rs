@@ -145,14 +145,10 @@ impl TmuxSession {
         // Close the first PTY - we only needed it to create the session.
         // (dropping _first_pty closes the file descriptor)
 
-        // Attach to the session with a new PTY
-        let mut attach_cmd = std::process::Command::new("tmux");
-        attach_cmd.args(["attach-session", "-t", &self.sanitized_name]);
-        let ptmx = self.pty_factory.start(&mut attach_cmd)?;
-        self.ptmx = Some(ptmx);
-        self.attached = true;
+        self.attached = false;
 
         // Auto-respond to trust prompts (e.g. "Do you trust the files in this folder?")
+        // Uses tmux capture-pane/send-keys, no PTY needed.
         self.handle_trust_prompt()?;
 
         Ok(())
@@ -198,21 +194,17 @@ impl TmuxSession {
         Ok(())
     }
 
-    /// Restore an existing tmux session by attaching to it.
+    /// Restore an existing tmux session by verifying it exists.
     /// Unlike `start`, this does not create or kill sessions.
+    /// No persistent PTY is created — monitoring uses `tmux capture-pane`
+    /// and interactive attach creates a temporary PTY on demand.
     pub fn restore(&mut self) -> Result<(), TmuxError> {
         // Verify the session exists
         self.cmd_exec
             .run("tmux", &args(&["has-session", "-t", &self.sanitized_name]))
             .map_err(|_| TmuxError::SessionNotFound(self.sanitized_name.clone()))?;
 
-        // Attach to the existing session
-        let mut attach_cmd = std::process::Command::new("tmux");
-        attach_cmd.args(["attach-session", "-t", &self.sanitized_name]);
-        let ptmx = self.pty_factory.start(&mut attach_cmd)?;
-        self.ptmx = Some(ptmx);
-        self.attached = true;
-
+        self.attached = false;
         Ok(())
     }
 
@@ -266,18 +258,20 @@ impl TmuxSession {
 
     /// Attach interactively to the tmux session.
     ///
-    /// Pipes stdin/stdout directly to/from the tmux session's PTY.
+    /// Creates a temporary PTY, pipes stdin/stdout directly to/from the tmux session.
     /// Returns when the user presses Ctrl+Q (ASCII 17) to detach.
-    /// After returning, calls `detach()` to restore a fresh monitoring PTY.
+    /// The PTY is cleaned up on return — no persistent processes are left behind.
     pub fn attach_interactive(&mut self) -> Result<(), TmuxError> {
         use std::io::{Read, Write};
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
-        let ptmx = match self.ptmx.as_ref() {
-            Some(f) => f,
-            None => return Err(TmuxError::CommandFailed("no PTY to attach to".into())),
-        };
+        // Create a temporary PTY for the interactive session
+        let mut attach_cmd = std::process::Command::new("tmux");
+        attach_cmd.args(["attach-session", "-t", &self.sanitized_name]);
+        let ptmx = self.pty_factory.start(&mut attach_cmd)?;
+        self.ptmx = Some(ptmx);
+        let ptmx = self.ptmx.as_ref().unwrap();
 
         // Clone file descriptors for the two threads
         let mut ptmx_reader = ptmx
@@ -287,7 +281,7 @@ impl TmuxSession {
             .try_clone()
             .map_err(|e| TmuxError::PtyError(e.to_string()))?;
 
-        // Shared flag to stop the resize monitor thread
+        // Shared flag to stop threads (resize monitor + stdout reader)
         let stop_flag = Arc::new(AtomicBool::new(false));
 
         // Channel to signal detach
@@ -295,15 +289,37 @@ impl TmuxSession {
         let detach_tx2 = detach_tx.clone();
 
         // Thread 1: copy PTY output -> stdout
+        // Uses poll() with a timeout so it can check the stop flag and exit
+        // cleanly when Ctrl+Q is pressed, preventing stale PTY output from
+        // corrupting the TUI after we return to the main menu.
+        let reader_stop = Arc::clone(&stop_flag);
         let stdout_handle = std::thread::spawn(move || {
+            use std::os::fd::AsRawFd;
+            let raw_fd = ptmx_reader.as_raw_fd();
             let mut stdout = std::io::stdout();
             let mut buf = [0u8; 4096];
             loop {
-                match ptmx_reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let _ = stdout.write_all(&buf[..n]);
-                        let _ = stdout.flush();
+                if reader_stop.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                // Poll with 100ms timeout so we periodically check the stop flag
+                let borrowed_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw_fd) };
+                let mut pollfd = [nix::poll::PollFd::new(
+                    borrowed_fd,
+                    nix::poll::PollFlags::POLLIN,
+                )];
+                match nix::poll::poll(&mut pollfd, nix::poll::PollTimeout::from(100u16)) {
+                    Ok(0) => continue, // timeout, check stop flag
+                    Ok(_) => {
+                        match ptmx_reader.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let _ = stdout.write_all(&buf[..n]);
+                                let _ = stdout.flush();
+                            }
+                            Err(_) => break,
+                        }
                     }
                     Err(_) => break,
                 }
@@ -387,12 +403,13 @@ impl TmuxSession {
         // Block until detach signal
         let _ = detach_rx.recv();
 
-        // Signal the resize thread to stop
+        // Signal the resize and stdout threads to stop
         stop_flag.store(true, Ordering::Relaxed);
 
-        // Clean up threads (they'll exit when PTY closes or stop flag is set)
-        // Don't join stdout_handle - it may be blocked on read
-        drop(stdout_handle);
+        // Wait for stdout thread to finish (exits within ~100ms thanks to poll timeout).
+        // This is critical: without joining, the thread can keep writing raw PTY output
+        // to stdout after the TUI is restored, corrupting the ratatui display.
+        let _ = stdout_handle.join();
         drop(stdin_handle);
 
         // Detach: close current PTY and open a fresh one for monitoring
@@ -412,18 +429,11 @@ impl TmuxSession {
 
     /// Detach from the tmux session.
     ///
-    /// Closes the current PTY and opens a fresh one for monitoring.
+    /// Closes the current PTY. Monitoring is done via `tmux capture-pane`
+    /// commands in background threads, so no persistent PTY is needed.
     pub fn detach(&mut self) -> Result<(), TmuxError> {
-        // Close the current PTY
         self.ptmx.take();
-
-        // Start a fresh PTY for monitoring
-        let mut attach_cmd = std::process::Command::new("tmux");
-        attach_cmd.args(["attach-session", "-t", &self.sanitized_name]);
-        let ptmx = self.pty_factory.start(&mut attach_cmd)?;
-        self.ptmx = Some(ptmx);
         self.attached = false;
-
         Ok(())
     }
 
@@ -661,12 +671,12 @@ mod tests {
 
         session.start("/tmp/workdir").unwrap();
 
-        // Verify exactly 2 PTY commands were created (new-session + attach-session)
-        assert_eq!(pty_clone.file_count(), 2);
+        // Verify exactly 1 PTY command was created (new-session only, no persistent attach)
+        assert_eq!(pty_clone.file_count(), 1);
 
-        // Verify the session has a PTY stored (from attach)
-        assert!(session.ptmx.is_some());
-        assert!(session.attached);
+        // No persistent PTY — monitoring uses tmux commands
+        assert!(session.ptmx.is_none());
+        assert!(!session.attached);
 
         // Verify the tmux commands that were run
         let commands = cmd_exec.commands();
@@ -945,9 +955,9 @@ mod tests {
         let commands = cmd_exec.commands();
         assert_eq!(commands[0].1[0], "has-session");
 
-        // Should have a PTY
-        assert!(session.ptmx.is_some());
-        assert!(session.attached);
+        // No persistent PTY — monitoring uses tmux commands directly
+        assert!(session.ptmx.is_none());
+        assert!(!session.attached);
     }
 
     #[test]
@@ -985,9 +995,8 @@ mod tests {
 
         session.detach().unwrap();
 
-        // Should still have a PTY (new one for monitoring)
-        assert!(session.ptmx.is_some());
-        // But no longer attached
+        // PTY is cleaned up — no persistent monitoring process
+        assert!(session.ptmx.is_none());
         assert!(!session.attached);
     }
 
